@@ -142,28 +142,31 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
     def rulebased_unit(state:GameState, unit:Unit):
         action = None
         if unit_on_factory(state, unit) and unit.power < unit.dig_cost(state) * 3:
+            #print(f"rb pickup id = {unit.unit_id}")
             action = unit.pickup(4, 50 if unit.unit_type == "LIGHT" else 100, True)
         adj, factory = unit_adjascent_factory(state, unit)
         if adj:
             direction_factory = direction_to(unit.pos, factory.pos)
             if unit.power < unit.dig_cost(state) + unit.move_cost(state, direction_factory) and\
-                unit.move_cost(state) + unit.action_queue_cost(state) < unit.power:
+                unit.move_cost(state, direction_factory) + unit.action_queue_cost(state) < unit.power:
                 action = unit.move(direction_factory)
-                print(f"rb move dir = {direction_factory} from {unit.pos} to {factory.pos}")
+                #print(f"rb move dir = {direction_factory} from {unit.pos} to {factory.pos}, id = {unit.unit_id}")
             else:
                 pos = unit.pos
-                if state.board.ice[pos[0]][pos[1]] == 1 or state.board.ore[pos[0]][pos[1]] == 1:
-                    print(f"rb dig rubble = {state.board.rubble[pos[0]][pos[1]]} pos = {pos}")
-                    print(f"ice = {state.board.ice[pos[0]][pos[1]]}, ore = {state.board.ore[pos[0]][pos[1]]}")
+                ice_existance = state.board.ice[pos[1]][pos[0]]
+                ore_existance = state.board.ore[pos[1]][pos[0]]
+                if state.board.ice[pos[1]][pos[0]] == 1 or state.board.ore[pos[1]][pos[0]] == 1:
+                    #print(f"rb dig rubble = {state.board.rubble[pos[1]][pos[0]]} pos = {pos}, ice = {unit.cargo.ice}, ore = {unit.cargo.ore}")
+                    #print(f"ice = {state.board.ice[pos[1]][pos[0]]}, ore = {state.board.ore[pos[1]][pos[0]]}, id = {unit.unit_id}")
                     action = unit.dig(True)
             if unit.cargo.ice > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
                 not all(unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos))):
                 action = unit.transfer(direction_factory, 0, unit.cargo.ice, False)
-                print(f"rb passing ice {unit.cargo.ice}")
+                #print(f"rb passing ice {unit.cargo.ice}, id = {unit.unit_id}")
             if unit.cargo.ore > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
                 not all(unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos))):
                 action = unit.transfer(direction_factory, 1, unit.cargo.ore, False)
-                print(f"rb passing ore {unit.cargo.ore}")
+                #print(f"rb passing ore {unit.cargo.ore}, id = {unit.unit_id}")
         return action
 
     tokens = tokens.squeeze(0)
@@ -541,7 +544,7 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, va
         if state.env_steps == game_len - 1:
             finished = True
         return finished
-    env = LuxAI2022(verbose = 1)
+    env = LuxAI2022(verbose = 0)
     seed = random.randint(0, 10000)
     step = 0
     env_cfg = env.env_cfg
@@ -725,7 +728,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print("ver1.2.3")
+        print("ver1.2.4")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
