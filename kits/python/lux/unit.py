@@ -5,7 +5,7 @@ import numpy as np
 from dataclasses import dataclass
 from lux.weather import get_weather_config
 from lux.cargo import UnitCargo
-from lux.config import EnvConfig
+from lux.config import EnvConfig, UnitConfig
 
 # a[1] = direction (0 = center, 1 = up, 2 = right, 3 = down, 4 = left)
 move_deltas = np.array([[0, 0], [0, -1], [1, 0], [0, 1], [-1, 0]])
@@ -19,7 +19,7 @@ class Unit:
     power: int
     cargo: UnitCargo
     env_cfg: EnvConfig
-    unit_cfg: dict
+    unit_cfg: UnitConfig
     action_queue: List
 
     def action_queue_cost(self, game_state):

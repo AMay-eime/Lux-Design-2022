@@ -52,7 +52,7 @@ import math
 import random
 
 #config
-restart_epoch = 41
+restart_epoch = 0
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -133,8 +133,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
 
     def rulebased_factory(state:GameState, factory:Factory):
         action = None
-        if factory.cargo.water - (env_cfg.max_episode_length - state.env_steps) <\
+        if factory.cargo.water - (env_cfg.max_episode_length - state.env_steps) >\
             factory.water_cost(state) * (env_cfg.max_episode_length - state.env_steps):
+            print("rb watering")
             action = factory.water()
         return action
 
@@ -145,18 +146,24 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
         adj, factory = unit_adjascent_factory(state, unit)
         if adj:
             direction_factory = direction_to(unit.pos, factory.pos)
-            if unit.power < unit.dig_cost(state) + unit.move_cost(state, direction_factory):
+            if unit.power < unit.dig_cost(state) + unit.move_cost(state, direction_factory) and\
+                unit.move_cost(state) + unit.action_queue_cost(state) < unit.power:
                 action = unit.move(direction_factory)
+                print(f"rb move dir = {direction_factory} from {unit.pos} to {factory.pos}")
             else:
                 pos = unit.pos
                 if state.board.ice[pos[0]][pos[1]] == 1 or state.board.ore[pos[0]][pos[1]] == 1:
+                    print(f"rb dig rubble = {state.board.rubble[pos[0]][pos[1]]} pos = {pos}")
+                    print(f"ice = {state.board.ice[pos[0]][pos[1]]}, ore = {state.board.ore[pos[0]][pos[1]]}")
                     action = unit.dig(True)
             if unit.cargo.ice > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
-                not unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos)):
+                not all(unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos))):
                 action = unit.transfer(direction_factory, 0, unit.cargo.ice, False)
+                print(f"rb passing ice {unit.cargo.ice}")
             if unit.cargo.ore > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
-                not unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos)):
+                not all(unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos))):
                 action = unit.transfer(direction_factory, 1, unit.cargo.ore, False)
+                print(f"rb passing ore {unit.cargo.ore}")
         return action
 
     tokens = tokens.squeeze(0)
@@ -192,7 +199,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 continue
             
             action = rulebased_unit(state, unit)
-            if(action == None):
+            if action is None:
                 embedder = robot_embedder(index)
                 action_value = 0
                 for i in range(token_len):
@@ -241,8 +248,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 else:
                     print("error-tipo")
             
-            if not action == None and not action == unit_next_action(unit):
-                actions[unit.unit_id] = np.expand_dims(action, 0)
+            if not (action is None) and not all(action == unit_next_action(unit)):
+                actions[unit.unit_id] = [action]
 
     elif state.env_steps != 0:
         pos = np.zeros(2)
@@ -409,6 +416,8 @@ def state_value(state:GameState, view_player):
     for factory in my_factories.values():
         cargo = factory.cargo
         value += cargo.ice//10000 + cargo.metal//10000 + cargo.water//1000 + cargo.metal//1000
+        if cargo.ice > 0 or cargo.water > (100-state.real_env_steps):
+            print("factory が ice を獲得したぞ！")
     #robot_resources:O(e-3)
     for unit in my_units.values():
         cargo = unit.cargo
@@ -532,7 +541,7 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, va
         if state.env_steps == game_len - 1:
             finished = True
         return finished
-    env = LuxAI2022(verbose = 0)
+    env = LuxAI2022(verbose = 1)
     seed = random.randint(0, 10000)
     step = 0
     env_cfg = env.env_cfg
@@ -716,7 +725,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print("ver1.1")
+        print("ver1.2.3")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
