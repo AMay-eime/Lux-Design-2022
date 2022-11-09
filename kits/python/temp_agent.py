@@ -114,6 +114,23 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 return True
         return False
 
+    def unit_adjascent_factory(state:GameState, unit:Unit):
+        team_name = f"player_{unit.team_id}"
+        factories = state.factories[team_name].values()
+        for factory in factories:
+            unit_pos = unit.pos
+            factory_pos = factory.pos
+            if (abs(unit_pos[0]-factory_pos[0]) == 2 and abs(unit_pos[1]-factory_pos[1]) < 2)\
+                or (abs(unit_pos[0]-factory_pos[0]) < 2 and abs(unit_pos[1]-factory_pos[1]) == 2):
+                return True, factory
+        return False, None
+
+    def unit_next_action(unit:Unit):
+        if(len(unit.action_queue) == 0):
+            return [0,0,0,0,0]
+        else:
+            return unit.action_queue[0]
+
     def rulebased_factory(state:GameState, factory:Factory):
         action = None
         if factory.cargo.water - (env_cfg.max_episode_length - state.env_steps) <\
@@ -121,19 +138,36 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
             action = factory.water()
         return action
 
-    def rulebased_unit(state:GameState, factory:Factory):
+    def rulebased_unit(state:GameState, unit:Unit):
         action = None
         if unit_on_factory(state, unit) and unit.power < unit.dig_cost(state) * 3:
             action = unit.pickup(4, 50 if unit.unit_type == "LIGHT" else 100, True)
-
+        adj, factory = unit_adjascent_factory(state, unit)
+        if adj:
+            direction_factory = direction_to(unit.pos, factory.pos)
+            if unit.power < unit.dig_cost(state) + unit.move_cost(state, direction_factory):
+                action = unit.move(direction_factory)
+            else:
+                pos = unit.pos
+                if state.board.ice[pos[0]][pos[1]] == 1 or state.board.ore[pos[0]][pos[1]] == 1:
+                    action = unit.dig(True)
+            if unit.cargo.ice > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
+                not unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos)):
+                action = unit.transfer(direction_factory, 0, unit.cargo.ice, False)
+            if unit.cargo.ore > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
+                not unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos)):
+                action = unit.transfer(direction_factory, 1, unit.cargo.ore, False)
         return action
-
 
     tokens = tokens.squeeze(0)
 
     actions = dict()
     if(state.real_env_steps >= 0):
         for index, factory in enumerate(my_factories.values()):
+            action = rulebased_factory(state, factory)
+            if not action == None:
+                actions[factory.unit_id] = action
+                continue
             embedder = factory_embedder(index)
             action_value = 0
             for i in range(token_len):
@@ -156,44 +190,59 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
         for index, unit in enumerate(my_units.values()):
             if(unit.power < unit.action_queue_cost(state)):
                 continue
-            embedder = robot_embedder(index)
-            action_value = 0
-            for i in range(token_len):
-                action_value += embedder[i] * tokens[i]
-            action_value = action_value % 6
-            if  action_value < 1:
-                direction = int(((action_value - 1)*4) % 4)+1
-                cost = unit.move_cost(state, direction)
-                if not(cost == None) and unit.power >= cost:
-                    actions[unit.unit_id] = np.expand_dims(unit.move(direction, True), 0)
-            elif action_value < 2:
-                resource_type = int(((action_value-1)*5) % 5)
-                direction = int(((action_value - 1)*20) % 4)+1
-                direction_vec = [((direction+1)//2)*(3-direction), ((direction)//2)*(direction-2)]
-                destination = [unit.pos[0] + direction_vec[0], unit.pos[1] + direction_vec[1]]
-                if -1 < destination[0] and destination[0] < env_cfg.map_size and -1 < destination[1] and destination[1] < env_cfg.map_size:
-                    actions[unit.unit_id] = np.expand_dims(unit.transfer(direction, resource_type, False), 0)
-            elif action_value < 3:
-                if unit_on_factory(state, unit):
-                    resource_type = int(((action_value-2)*5) % 5)
-                    actions[unit.unit_id] = np.expand_dims(unit.pickup(resource_type, 100, False), 0)
-                elif unit.power >= unit.dig_cost(state):
-                    actions[unit.unit_id] = np.expand_dims(unit.dig(False), 0)
-            elif action_value < 4:
-                if unit_on_factory(state, unit):
-                    actions[unit.unit_id] = np.expand_dims(unit.pickup(4, unit.dig_cost(state), True), 0)
-                elif unit.power >= unit.dig_cost(state):
-                    actions[unit.unit_id] = np.expand_dims(unit.dig(True), 0)
-            elif action_value < 5:
-                #actions[unit.unit_id] = unit.self_destruct(False)
-                if unit_on_factory(state, unit):
-                    actions[unit.unit_id] = np.expand_dims(unit.pickup(4, unit.dig_cost(state), True), 0)
-                elif unit.power >= unit.dig_cost(state):
-                    actions[unit.unit_id] = np.expand_dims(unit.dig(False), 0)
-            elif action_value < 6:
-                pass
-            else:
-                print("error-tipo")
+            
+            action = rulebased_unit(state, unit)
+            if(action == None):
+                embedder = robot_embedder(index)
+                action_value = 0
+                for i in range(token_len):
+                    action_value += embedder[i] * tokens[i]
+                action_value = action_value % 6
+                if  action_value < 1:
+                    direction = int(((action_value - 1)*4) % 4)+1
+                    cost = unit.move_cost(state, direction)
+                    if not(cost == None) and unit.power >= cost:
+                        action = unit.move(direction, True)
+                elif action_value < 2:
+                    #transferはiceかoreのみ
+                    resource_type = int(((action_value-1)*3) % 3)
+                    direction = int(((action_value - 1)*20) % 4)+1
+                    direction_vec = [((direction+1)//2)*(3-direction), ((direction)//2)*(direction-2)]
+                    destination = [unit.pos[0] + direction_vec[0], unit.pos[1] + direction_vec[1]]
+                    if -1 < destination[0] and destination[0] < env_cfg.map_size and -1 < destination[1] and destination[1] < env_cfg.map_size:
+                        if resource_type == 0:
+                            action = unit.transfer(direction, 0, unit.cargo.ice, False)
+                        elif resource_type == 1:
+                            action = unit.transfer(direction, 1, unit.cargo.ore, False)
+                        elif resource_type == 2:
+                            action = unit.transfer(direction, 4, unit.power//2, False)
+                        else:
+                            print("どのリソースをtransferするん？")
+                elif action_value < 3:
+                    #pick_upはiceかoreのみ
+                    if unit_on_factory(state, unit):
+                        resource_type = int(((action_value-2)*2) % 2)
+                        action = unit.pickup(resource_type, 100, False)
+                    elif unit.power >= unit.dig_cost(state):
+                        action = unit.dig(False)
+                elif action_value < 4:
+                    if unit_on_factory(state, unit):
+                        action = unit.pickup(4, unit.dig_cost(state), True)
+                    elif unit.power >= unit.dig_cost(state):
+                        action = unit.dig(True)
+                elif action_value < 5:
+                    #actions[unit.unit_id] = unit.self_destruct(False)
+                    if unit_on_factory(state, unit):
+                        action = unit.pickup(4, unit.dig_cost(state), True)
+                    elif unit.power >= unit.dig_cost(state):
+                        action = unit.dig(False)
+                elif action_value < 6:
+                    pass
+                else:
+                    print("error-tipo")
+            
+            if not action == None and not action == unit_next_action(unit):
+                actions[unit.unit_id] = np.expand_dims(action, 0)
 
     elif state.env_steps != 0:
         pos = np.zeros(2)
