@@ -52,7 +52,7 @@ import math
 import random
 
 #config
-restart_epoch = 0
+restart_epoch = 21
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -62,12 +62,12 @@ action_token_num = 2
 heads = 6
 encoder_layers = 6
 decoder_layers = 6
-epochs = 1000
+epochs = 2000
 results_per_epoch = 3000
-max_var = 0.6
+beta_max = 0.5
 batch_size = 16
 
-gamma = 0.98
+gamma_max = 0.98
 advantage_steps = 3
 
 #便利な変換する奴らたち
@@ -419,8 +419,6 @@ def state_value(state:GameState, view_player):
     for factory in my_factories.values():
         cargo = factory.cargo
         value += cargo.ice//10000 + cargo.metal//10000 + cargo.water//1000 + cargo.metal//1000
-        if cargo.ice > 0 or cargo.water > (100-state.real_env_steps):
-            print("factory が ice を獲得したぞ！")
     #robot_resources:O(e-3)
     for unit in my_units.values():
         cargo = unit.cargo
@@ -534,7 +532,7 @@ class DataSet(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return len(self.s)
 
-def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, variance):
+def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, beta):
     def check_is_finished(state:GameState, game_len):
         finished = False
         factories = state.factories.values()
@@ -548,7 +546,6 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, va
     seed = random.randint(0, 10000)
     step = 0
     env_cfg = env.env_cfg
-    print(f"env reset seed = {seed}")
     obs = env.reset(seed = seed)["player_0"]
     state = obs_to_game_state(step, env_cfg, obs)
     state_tokens_0 = env_to_tokens(state, "player_0")
@@ -577,23 +574,23 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, va
         search_1:np.ndarray = s_net(torch.concat([state_tokens_1, a_1_t]).unsqueeze(0)).to('cpu').detach().numpy().copy()
         search_mse_1 = ((default_1 - search_1) ** 2).mean()
         for i in range(10):#もちろん時間で区切ってもよし
-            a_0_ = action_nearby_token(a_0, variance)
+            a_0_ = action_nearby_token(a_0, beta)
             a_0_t_ = torch.from_numpy(a_0_).float().to(device)
             value_0_ = v_net(torch.concat([state_tokens_0, a_0_t_]))
             default_0_:np.ndarray = d_net(torch.concat([state_tokens_0, a_0_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_0_:np.ndarray = s_net(torch.concat([state_tokens_0, a_0_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_mse_0_ = ((default_0_ - search_0_) ** 2).mean()
-            a_1_ = action_nearby_token(a_1, variance)
+            a_1_ = action_nearby_token(a_1, beta)
             a_1_t_ = torch.from_numpy(a_1_).float().to(device)
             value_1_ = v_net(torch.concat([state_tokens_1, a_1_t_]))
             default_1_:np.ndarray = d_net(torch.concat([state_tokens_1, a_1_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_1_:np.ndarray = s_net(torch.concat([state_tokens_1, a_1_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_mse_1_ = ((default_1_ - search_1_) ** 2).mean()
-            if ((value_0_ - value_0)/(abs(value_0)+1e-10) * (1-variance) + (search_mse_0_ - search_mse_0)/search_mse_0 * variance) > 0:
+            if ((value_0_ - value_0)/(abs(value_0)+1e-10) * (1-beta) + (search_mse_0_ - search_mse_0)/search_mse_0 * beta) > 0:
                 a_0 = a_0_
                 value_0 = value_0_
                 search_mse_0 = search_mse_0_
-            if ((value_1_ - value_1)/(abs(value_1)+1e-10) * (1-variance) + (search_mse_1_ - search_mse_1)/search_mse_1 * variance) > 0:
+            if ((value_1_ - value_1)/(abs(value_1)+1e-10) * (1-beta) + (search_mse_1_ - search_mse_1)/search_mse_1 * beta) > 0:
                 a_1 = a_1_
                 value_1 = value_1_
                 search_mse_1 = search_mse_1_
@@ -613,6 +610,7 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, va
         state_value_1_ = state_value(state, "player_1")
         returns_1.append(state_value_1_ - state_value_1)
         state_value_1 = state_value_1_             
+    print(f"env {seed} finished in step {state.real_env_steps}")
 
     return (states_0, actions_0, returns_0),(states_1, actions_1, returns_1)#各ステップのenv, act, returnの配列を吐き出させる
 
@@ -629,7 +627,7 @@ def Play_with_display(value_net: ValueNet, action_net: ActionNet, variance):
                 value = value_
     return [], [], [] #各ステップのenv, act, returnの配列を吐き出させる
 
-def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:CustomNet):#マッチの結果をもとに学習をする。
+def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:CustomNet, gamma):#マッチの結果をもとに学習をする。
     train_set = DataSet()
     for result in results:
         steps = len(result[1])
@@ -704,18 +702,19 @@ def Train():
         default_net.load_state_dict(torch.load(f"model_d_{restart_epoch-1}.pth"))
         search_net.load_state_dict(torch.load(f"model_s_{restart_epoch-1}.pth"))
 
-    for i in range(epochs):
+    for i in range(epochs - restart_epoch):
+        variance = abs(1-(((i+restart_epoch)%200)/100)) * (1 - (i + restart_epoch)/epochs)
         results = []
         results_num = 0
         while results_num < results_per_epoch:
             result_1, result_2 = Play(value_net, action_net, default_net, search_net,\
-                (1-((i+restart_epoch)//100)/100)*max_var)
+                (beta_max * variance))
             results.append(result_1)
             results_num += len(result_1[1])
             results.append(result_2)
             results_num += len(result_2[1])
-        print("average episode len {0:3g}".format(results_num/len(results)))
-        Update(results, action_net, value_net, default_net, search_net)
+        print("average episode len {0:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), max((1-variance)*gamma_max, 0.1), beta_max * variance))
+        Update(results, action_net, value_net, default_net, search_net, max((1-variance)*gamma_max, 0.1))
         
         if (i + restart_epoch)%10 == 0:
             torch.save(action_net.state_dict(), f"model_a_{restart_epoch + i}.pth")
@@ -728,7 +727,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print("ver1.2.4")
+        print("ver1.2.5")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
