@@ -52,7 +52,7 @@ import math
 import random
 
 #config
-restart_epoch = 21
+restart_epoch = 31
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -63,6 +63,7 @@ heads = 6
 encoder_layers = 6
 decoder_layers = 6
 epochs = 2000
+swing_range = 100
 results_per_epoch = 3000
 beta_max = 0.5
 batch_size = 16
@@ -419,6 +420,8 @@ def state_value(state:GameState, view_player):
     for factory in my_factories.values():
         cargo = factory.cargo
         value += cargo.ice//10000 + cargo.metal//10000 + cargo.water//1000 + cargo.metal//1000
+        if(factory.cargo.water > 100 - state.real_env_steps):
+            value += 0.01
     #robot_resources:O(e-3)
     for unit in my_units.values():
         cargo = unit.cargo
@@ -703,7 +706,7 @@ def Train():
         search_net.load_state_dict(torch.load(f"model_s_{restart_epoch-1}.pth"))
 
     for i in range(epochs - restart_epoch):
-        variance = abs(1-(((i+restart_epoch)%200)/100)) * (1 - (i + restart_epoch)/epochs)
+        variance = abs(1-(((i+restart_epoch)%(swing_range*2)))/swing_range) * (1 - (i + restart_epoch)/epochs)
         results = []
         results_num = 0
         while results_num < results_per_epoch:
@@ -713,7 +716,7 @@ def Train():
             results_num += len(result_1[1])
             results.append(result_2)
             results_num += len(result_2[1])
-        print("average episode len {0:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), max((1-variance)*gamma_max, 0.1), beta_max * variance))
+        print("average episode len {0:3g},variance = {3:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), max((1-variance)*gamma_max, 0.1), beta_max * variance, variance))
         Update(results, action_net, value_net, default_net, search_net, max((1-variance)*gamma_max, 0.1))
         
         if (i + restart_epoch)%10 == 0:
@@ -727,7 +730,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print("ver1.2.5")
+        print("ver1.3.1")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
