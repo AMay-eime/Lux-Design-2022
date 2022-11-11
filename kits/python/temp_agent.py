@@ -183,7 +183,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
             action_value = 0
             for i in range(token_len):
                 action_value += embedder[i] * tokens[i]
-            action_value = action_value % 4
+            action_value = action_value % 3
             if action_value < 1:
                 if factory.cargo.metal >= factory.build_heavy_metal_cost(state) and factory.power >= factory.build_heavy_power_cost(state):
                     actions[factory.unit_id] = factory.build_heavy()
@@ -191,9 +191,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 if factory.cargo.metal >= factory.build_light_metal_cost(state) and factory.power >= factory.build_light_power_cost(state):
                     actions[factory.unit_id] = factory.build_light()
             elif action_value < 3:
-                if factory.cargo.water >= factory.water_cost(state):
-                    actions[factory.unit_id] = factory.water()
-            elif action_value < 4:\
                 pass
             else:
                 print("error-tipo")
@@ -283,6 +280,13 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
 
 def env_to_tokens(state:GameState, view_agent):#雑に作る。若干の情報のオーバーラップは仕方なし。
     board = state.board
+    agents = []
+    if view_agent == "player_0":
+        agents = ["player_0", "player_1"]
+    elif view_agent == "player_1":
+        agents = ["player_1", "player_0"]
+    else:
+        print("error tipo")
     #まずはrubble
     rubble_map = board.rubble
     rubble_map = rubble_map.reshape((rubble_map.size // token_len, token_len))
@@ -601,7 +605,7 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
                 a_0 = a_0_
                 value_0 = value_0_
                 search_mse_0 = search_mse_0_
-            if ((value_1_ - value_1)/(abs(value_1)+1e-10) * (1-beta) + (search_mse_1_ - search_mse_1)/search_mse_1 * beta * 50) > 0:
+            if ((value_1_ - value_1)/(abs(value_1)+1e-10) * (1-beta) + (search_mse_1_ - search_mse_1)/search_mse_1 * beta / 10) > 0:
                 a_1 = a_1_
                 value_1 = value_1_
                 search_mse_1 = search_mse_1_
@@ -752,7 +756,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print("ver1.3.8")
+        print("ver1.3.9")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
