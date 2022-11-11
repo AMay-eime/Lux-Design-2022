@@ -52,7 +52,7 @@ import math
 import random
 
 #config
-restart_epoch = 31
+restart_epoch = 0
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -385,7 +385,8 @@ def state_value(state:GameState, view_player):
     my_factories = factories[player]
     opp_factories = factories[opp_player]
     #alive:O(e0)
-    value += state.real_env_steps//1000
+    value += state.real_env_steps/1000
+    #print(f"val 0 = {value}")
     #lichens:O(e0)
     my_strains = []
     opp_strains = []
@@ -403,11 +404,13 @@ def state_value(state:GameState, view_player):
                 value += lichen[i][k]/1000
             if strain_id in opp_strains:
                 value -= lichen[i][k]/1000
+    #print(f"val 1 = {value}")
     #factory_num:O(e-1)
     for factory in my_factories.values():
         value += min(factory.cargo.water/50, 1)
     for factory in opp_factories.values():
         value -= min(factory.cargo.water/50, 1)
+    #print(f"val 2 = {value}")
     #//ここまで相手方の情報を考慮する
     my_units = state.units[player]
     #robot_num:O(e-1)
@@ -416,16 +419,19 @@ def state_value(state:GameState, view_player):
             value += 0.01
         elif(unit.unit_type == "HEAVY"):
             value += 0.1
+    #print(f"val 3 = {value}")
     #factory_resources:O(e-2)
     for factory in my_factories.values():
         cargo = factory.cargo
-        value += cargo.ice//10000 + cargo.metal//10000 + cargo.water//1000 + cargo.metal//1000
+        value += cargo.ice/2000 + cargo.ore/10000 + cargo.water/1000 + cargo.metal/2000
         if(factory.cargo.water > 100 - state.real_env_steps):
             value += 0.01
+    #print(f"val 4 = {value}")
     #robot_resources:O(e-3)
     for unit in my_units.values():
         cargo = unit.cargo
-        value += cargo.ice//50000 + cargo.metal//50000
+        value += cargo.ice/10000 + cargo.metal/50000
+    #print(f"val 5 = {value}")
     
     return value
 
@@ -459,8 +465,7 @@ class ActionNet(nn.Module):#stateからactionを導く。学習度判定にも�
         self.sequence = nn.Sequential(\
             nn.Linear(token_len, token_len),\
             nn.ReLU(),\
-            nn.Linear(token_len, token_len),\
-            nn.ReLU())
+            nn.Linear(token_len, token_len))
 
     def forward(self, state):
         x:torch.Tensor = self.pos_encoder(state)
@@ -478,8 +483,7 @@ class ValueNet(nn.Module):#stateとactionからvalueを導く。
         self.sequence = nn.Sequential(\
             nn.Linear(token_len, token_len//2),\
             nn.ReLU(),\
-            nn.Linear(token_len//2, 1),\
-            nn.ReLU())
+            nn.Linear(token_len//2, 1))
 
     def forward(self, state):
         x = self.pos_encoder(state)
@@ -497,8 +501,7 @@ class CustomNet(nn.Module):
         self.sequence = nn.Sequential(\
             nn.Linear(token_len, token_len),\
             nn.ReLU(),\
-            nn.Linear(token_len, token_len//2),\
-            nn.ReLU())
+            nn.Linear(token_len, token_len//2))
 
     def forward(self, state):
         x = self.pos_encoder(state)
@@ -538,13 +541,16 @@ class DataSet(torch.utils.data.Dataset):
 def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, beta):
     def check_is_finished(state:GameState, game_len):
         finished = False
-        factories = state.factories.values()
-        for factory in factories:
+        cause:str = ""
+        factories = state.factories.items()
+        for agent, factory in factories:
             if len(factory) == 0 and state.real_env_steps > 0:
                 finished = True
+                cause += f"[{agent} down] "
         if state.env_steps == game_len - 1:
             finished = True
-        return finished
+            cause += f"[env leached last]"
+        return finished, cause
     env = LuxAI2022(verbose = 0)
     seed = random.randint(0, 10000)
     step = 0
@@ -553,15 +559,15 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
     state = obs_to_game_state(step, env_cfg, obs)
     state_tokens_0 = env_to_tokens(state, "player_0")
     state_tokens_1 = env_to_tokens(state, "player_1")
-    state_value_0 = 0
-    state_value_1 = 0
+    state_value_0 = state_value(state, "player_0")
+    state_value_1 = state_value(state, "player_1")
     states_0 = [state_tokens_0]
     actions_0 = []
     returns_0 = []
     states_1 = [state_tokens_1]
     actions_1 = []
     returns_1 = []
-    while not check_is_finished(state, env_cfg.max_episode_length):#環境が終わるまで
+    while not check_is_finished(state, env_cfg.max_episode_length)[0]:#環境が終わるまで
         state_tokens_0 = torch.from_numpy(env_to_tokens(state, "player_0")).float().to(device)
         state_tokens_1 = torch.from_numpy(env_to_tokens(state, "player_1")).float().to(device)
         a_0_t = a_net(state_tokens_0)
@@ -579,21 +585,23 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
         for i in range(10):#もちろん時間で区切ってもよし
             a_0_ = action_nearby_token(a_0, beta)
             a_0_t_ = torch.from_numpy(a_0_).float().to(device)
-            value_0_ = v_net(torch.concat([state_tokens_0, a_0_t_]))
+            value_0_ = v_net(torch.concat([state_tokens_0, a_0_t_])).item()
             default_0_:np.ndarray = d_net(torch.concat([state_tokens_0, a_0_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_0_:np.ndarray = s_net(torch.concat([state_tokens_0, a_0_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_mse_0_ = ((default_0_ - search_0_) ** 2).mean()
             a_1_ = action_nearby_token(a_1, beta)
             a_1_t_ = torch.from_numpy(a_1_).float().to(device)
-            value_1_ = v_net(torch.concat([state_tokens_1, a_1_t_]))
+            value_1_ = v_net(torch.concat([state_tokens_1, a_1_t_])).item()
             default_1_:np.ndarray = d_net(torch.concat([state_tokens_1, a_1_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_1_:np.ndarray = s_net(torch.concat([state_tokens_1, a_1_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_mse_1_ = ((default_1_ - search_1_) ** 2).mean()
+            #print("val = {0:3g}, beta = {1:3g}".format((value_0_ - value_0)/(abs(value_0)+1e-10), (search_mse_0_ - search_mse_0)/search_mse_0 * beta * 50))
+            #print("fromval = {0:3g}, to val = {1:3g}".format(value_0, value_0_))
             if ((value_0_ - value_0)/(abs(value_0)+1e-10) * (1-beta) + (search_mse_0_ - search_mse_0)/search_mse_0 * beta) > 0:
                 a_0 = a_0_
                 value_0 = value_0_
                 search_mse_0 = search_mse_0_
-            if ((value_1_ - value_1)/(abs(value_1)+1e-10) * (1-beta) + (search_mse_1_ - search_mse_1)/search_mse_1 * beta) > 0:
+            if ((value_1_ - value_1)/(abs(value_1)+1e-10) * (1-beta) + (search_mse_1_ - search_mse_1)/search_mse_1 * beta * 50) > 0:
                 a_1 = a_1_
                 value_1 = value_1_
                 search_mse_1 = search_mse_1_
@@ -608,12 +616,14 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
         states_0.append(state_tokens_0)
         states_1.append(state_tokens_1)
         state_value_0_ = state_value(state, "player_0")
+        #print(f"state value to 0 = {state_value_0_}")
         returns_0.append(state_value_0_ - state_value_0)
+        #print(f"step {state.real_env_steps} player_0 return = {state_value_0_ - state_value_0}")
         state_value_0 = state_value_0_   
         state_value_1_ = state_value(state, "player_1")
         returns_1.append(state_value_1_ - state_value_1)
         state_value_1 = state_value_1_             
-    print(f"env {seed} finished in step {state.real_env_steps}")
+    print(f"env {seed} finished in step {state.real_env_steps} cause = {check_is_finished(state, env_cfg.max_episode_length)[1]}")
 
     return (states_0, actions_0, returns_0),(states_1, actions_1, returns_1)#各ステップのenv, act, returnの配列を吐き出させる
 
@@ -643,6 +653,7 @@ def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:Cust
                 last_state_tensor = torch.from_numpy(result[0][i + advantage_steps + 1]).float().to(device)
                 last_value:torch.Tensor = v_net(last_state_tensor)
                 v += last_value.detach().item()
+            
             v = np.array([v])
             train_set.add_items(s, a, v)
     print(f"made train set")
@@ -668,22 +679,23 @@ def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:Cust
 
         a_output = a_net(s)
         a_loss = square_loss(a_output, a)
-        running_loss_a += a_loss.item()
         a_loss.backward()
         a_optimiser.step()
+        running_loss_a += a_loss.item()
         v_output = v_net(torch.concat((s, a)))
-        v_loss = square_loss(v_output, v)
-        running_loss_v += v_loss.item()
+        #print(f"src v = {v_output}")
+        v_loss:torch.Tensor = square_loss(v_output, v)
         v_loss.backward()
         v_optimizer.step()
+        running_loss_v += v_loss.item()
 
         d_output:torch.Tensor = d_net(s)
         d_output = d_output.detach()
         s_output = s_net(s)
         s_loss = square_loss(s_output, d_output)
-        running_loss_s += s_loss.item()
         s_loss.backward()
         s_optimizer.step()
+        running_loss_s += s_loss.item()
         if(j % 1000 == 50):
             print("running loss [v: {0:.3g}, a: {1:.3g}, s: {2:.3g}]"\
                 .format(running_loss_v/50, running_loss_a/50, running_loss_s/50))
@@ -706,6 +718,11 @@ def Train():
         search_net.load_state_dict(torch.load(f"model_s_{restart_epoch-1}.pth"))
 
     for i in range(epochs - restart_epoch):
+        #Playから
+        action_net.eval()
+        value_net.eval()
+        default_net.eval()
+        search_net.eval()
         variance = abs(1-(((i+restart_epoch)%(swing_range*2)))/swing_range) * (1 - (i + restart_epoch)/epochs)
         results = []
         results_num = 0
@@ -716,6 +733,11 @@ def Train():
             results_num += len(result_1[1])
             results.append(result_2)
             results_num += len(result_2[1])
+        #ネットワークアップデート
+        action_net.train()
+        value_net.train()
+        default_net.train()
+        search_net.train()
         print("average episode len {0:3g},variance = {3:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), max((1-variance)*gamma_max, 0.1), beta_max * variance, variance))
         Update(results, action_net, value_net, default_net, search_net, max((1-variance)*gamma_max, 0.1))
         
@@ -730,7 +752,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print("ver1.3.1")
+        print("ver1.3.8")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
