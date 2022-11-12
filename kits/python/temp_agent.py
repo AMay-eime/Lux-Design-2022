@@ -143,7 +143,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
     def rulebased_unit(state:GameState, unit:Unit):
         action = None
         if unit_on_factory(state, unit) and unit.power < unit.dig_cost(state) * 3:
-            #print(f"rb pickup id = {unit.unit_id}")
+            print(f"rb pickup id = {unit.unit_id}")
             action = unit.pickup(4, 50 if unit.unit_type == "LIGHT" else 100, True)
         adj, factory = unit_adjascent_factory(state, unit)
         if adj:
@@ -198,7 +198,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
         for index, unit in enumerate(my_units.values()):
             if(unit.power < unit.action_queue_cost(state)):
                 continue
-            
+            print(f"unit {unit.unit_id} is in action")
             action = rulebased_unit(state, unit)
             if action is None:
                 embedder = robot_embedder(index)
@@ -308,7 +308,7 @@ def env_to_tokens(state:GameState, view_agent):#雑に作る。若干の情報�
     #次にfactory(場所:2, リソース:5, strain_id:1, player:1)最高でも5個らしい
     factory_info = np.zeros((1, token_len))
     index_pos = 0
-    for agent in state.factories:
+    for agent in agents:
         for factory in state.factories[agent].values():
             factory_info[0][index_pos] = factory.pos[0] / 48
             factory_info[0][index_pos+1] = factory.pos[1] / 48
@@ -332,7 +332,7 @@ def env_to_tokens(state:GameState, view_agent):#雑に作る。若干の情報�
     unit_infos = np.zeros((10, token_len))
     x_index = 0
     y_index = 0
-    for agent in state.units:
+    for agent in agents:
         for unit in state.units[agent].values():
             unit_infos[x_index][y_index] = unit.pos[0] / 48
             unit_infos[x_index][y_index+1] = unit.pos[1] / 48
@@ -420,21 +420,21 @@ def state_value(state:GameState, view_player):
     #robot_num:O(e-1)
     for unit in my_units.values():
         if(unit.unit_type == "LIGHT"):
-            value += 0.01
+            value += 0
         elif(unit.unit_type == "HEAVY"):
-            value += 0.1
+            value += 0
     #print(f"val 3 = {value}")
     #factory_resources:O(e-2)
     for factory in my_factories.values():
         cargo = factory.cargo
-        value += cargo.ice/2000 + cargo.ore/10000 + cargo.water/1000 + cargo.metal/2000
+        value += cargo.ice/2000 + cargo.water/1000
         if(factory.cargo.water > 100 - state.real_env_steps):
             value += 0.01
     #print(f"val 4 = {value}")
     #robot_resources:O(e-3)
     for unit in my_units.values():
         cargo = unit.cargo
-        value += cargo.ice/10000 + cargo.metal/50000
+        value += cargo.ice/4000
     #print(f"val 5 = {value}")
     
     return value
@@ -600,7 +600,6 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
             search_1_:np.ndarray = s_net(torch.concat([state_tokens_1, a_1_t_]).unsqueeze(0)).to('cpu').detach().numpy().copy()
             search_mse_1_ = ((default_1_ - search_1_) ** 2).mean()
             #print("val = {0:3g}, beta = {1:3g}".format((value_0_ - value_0)/(abs(value_0)+1e-10), (search_mse_0_ - search_mse_0)/search_mse_0 * beta * 50))
-            #print("fromval = {0:3g}, to val = {1:3g}".format(value_0, value_0_))
             if ((value_0_ - value_0)/(abs(value_0)+1e-10) * (1-beta) + (search_mse_0_ - search_mse_0)/search_mse_0 * beta) > 0:
                 a_0 = a_0_
                 value_0 = value_0_
@@ -620,10 +619,7 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
         states_0.append(state_tokens_0)
         states_1.append(state_tokens_1)
         state_value_0_ = state_value(state, "player_0")
-        #print(f"state value to 0 = {state_value_0_}")
         returns_0.append(state_value_0_ - state_value_0)
-        #print(f"step {state.real_env_steps} player_0 return = {state_value_0_ - state_value_0}")
-        state_value_0 = state_value_0_   
         state_value_1_ = state_value(state, "player_1")
         returns_1.append(state_value_1_ - state_value_1)
         state_value_1 = state_value_1_             
@@ -716,10 +712,10 @@ def Train():
     default_net = CustomNet().to(device)
     search_net = CustomNet().to(device)
     if(restart_epoch > 0):
-        action_net.load_state_dict(torch.load(f"model_a_{restart_epoch-1}.pth"))
-        value_net.load_state_dict(torch.load(f"model_v_{restart_epoch-1}.pth"))
-        default_net.load_state_dict(torch.load(f"model_d_{restart_epoch-1}.pth"))
-        search_net.load_state_dict(torch.load(f"model_s_{restart_epoch-1}.pth"))
+        action_net.load_state_dict(torch.load(f"model_a_{restart_epoch-1}.pth", map_location= device))
+        value_net.load_state_dict(torch.load(f"model_v_{restart_epoch-1}.pth", map_location= device))
+        default_net.load_state_dict(torch.load(f"model_d_{restart_epoch-1}.pth", map_location= device))
+        search_net.load_state_dict(torch.load(f"model_s_{restart_epoch-1}.pth", map_location= device))
 
     for i in range(epochs - restart_epoch):
         #Playから
@@ -756,7 +752,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print("ver1.3.9")
+        print("ver1.5.0")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義

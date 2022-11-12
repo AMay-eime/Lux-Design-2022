@@ -123,7 +123,7 @@ class GameState:
     A GameState object at step env_steps. Copied from luxai2022/state/state.py
     """
     env_steps: int
-    env_cfg: dict
+    env_cfg: EnvConfig
     board: Board
     weather_schedule: np.ndarray = None
     units: Dict[str, Dict[str, Unit]] = field(default_factory=dict)
