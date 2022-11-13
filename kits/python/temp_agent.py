@@ -69,7 +69,7 @@ beta_max = 0.5
 batch_size = 16
 
 gamma_max = 0.98
-advantage_steps = 3
+advantage_steps = 10
 
 #便利な変換する奴らたち
 def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
@@ -143,7 +143,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
     def rulebased_unit(state:GameState, unit:Unit):
         action = None
         if unit_on_factory(state, unit) and unit.power < unit.dig_cost(state) * 3:
-            print(f"rb pickup id = {unit.unit_id}")
+            #print(f"rb pickup id = {unit.unit_id}")
             action = unit.pickup(4, 50 if unit.unit_type == "LIGHT" else 100, True)
         adj, factory = unit_adjascent_factory(state, unit)
         if adj:
@@ -198,7 +198,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
         for index, unit in enumerate(my_units.values()):
             if(unit.power < unit.action_queue_cost(state)):
                 continue
-            print(f"unit {unit.unit_id} is in action")
+            
             action = rulebased_unit(state, unit)
             if action is None:
                 embedder = robot_embedder(index)
@@ -259,7 +259,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
             embedder = start_embedder(i)
             for k in range(token_len):
                 action_value += embedder[k]*tokens[k]
-            grid = math.ceil(action_value % 48)
+            grid = math.ceil(action_value * 48 % 48)
             pos[i] = grid
         potential_spawns:np.ndarray = state.board.spawns[agent]
         length = 100
@@ -620,9 +620,12 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
         states_1.append(state_tokens_1)
         state_value_0_ = state_value(state, "player_0")
         returns_0.append(state_value_0_ - state_value_0)
+        state_value_0 = state_value_0_
         state_value_1_ = state_value(state, "player_1")
         returns_1.append(state_value_1_ - state_value_1)
-        state_value_1 = state_value_1_             
+        state_value_1 = state_value_1_
+        #print(f"0 return = {returns_0[-1]} value = {state_value_0}")
+        #print(f"1 return = {returns_1[-1]} value = {state_value_1}")             
     print(f"env {seed} finished in step {state.real_env_steps} cause = {check_is_finished(state, env_cfg.max_episode_length)[1]}")
 
     return (states_0, actions_0, returns_0),(states_1, actions_1, returns_1)#各ステップのenv, act, returnの配列を吐き出させる
@@ -644,6 +647,7 @@ def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:Cust
     train_set = DataSet()
     for result in results:
         steps = len(result[1])
+        #print(result[2])
         for i in range(steps):
             s, s_, a = result[0][i], result[0][i+1], result[1][i]
             v = 0
@@ -652,8 +656,8 @@ def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:Cust
             if (steps > i+advantage_steps):
                 last_state_tensor = torch.from_numpy(result[0][i + advantage_steps + 1]).float().to(device)
                 last_value:torch.Tensor = v_net(last_state_tensor)
-                v += last_value.detach().item()
-            
+                v += last_value.detach().item() * pow(gamma, advantage_steps)
+            #print(f"step {i} value is {v}")
             v = np.array([v])
             train_set.add_items(s, a, v)
     print(f"made train set")
@@ -675,7 +679,8 @@ def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:Cust
         s = torch.transpose(s, 0, 1).to(device)#[N, B, Length]
         a = torch.transpose(a, 0, 1).to(device)#[1, B, Length]
         v = torch.unsqueeze(v, 0).to(device)#[1, N, 1]
-        v_total += v[0][0][0].item()
+        #print(f"tgt v = {v}")
+        v_total += torch.mean(v).item()
 
         a_output = a_net(s)
         a_loss = square_loss(a_output, a)
@@ -752,7 +757,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print("ver1.5.0")
+        print(f"ver1.6.2 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義

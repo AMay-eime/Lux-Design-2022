@@ -278,7 +278,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
             embedder = start_embedder(i)
             for k in range(token_len):
                 action_value += embedder[k]*tokens[k]
-            grid = math.ceil(action_value % 48)
+            grid = math.ceil(action_value * 48 % 48)
             pos[i] = grid
         potential_spawns:np.ndarray = state.board.spawns[agent]
         length = 100
@@ -290,6 +290,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
             if length_ < length:
                 index = i
                 length = length_
+        print(f"{agent} spawn at {pos}")
         actions = dict(spawn = potential_spawns[index], metal = 100, water = 100)
     else:
         actions = dict(faction="AlphaStrike", bid = 0)
@@ -399,6 +400,64 @@ def action_nearby_token(token:np.ndarray, variance):
     token_ = token + random_array
     return token_
 
+def state_value(state:GameState, view_player):
+    player = view_player
+    opp_player = "player_1" if player == "player_0" else "player_0"
+    value = 0
+    factories = state.factories
+    my_factories = factories[player]
+    opp_factories = factories[opp_player]
+    #alive:O(e0)
+    value += state.real_env_steps/1000
+    #print(f"val 0 = {value}")
+    #lichens:O(e0)
+    my_strains = []
+    opp_strains = []
+    for factory in my_factories.values():
+        my_strains.append(factory.strain_id)
+    for factory in opp_factories.values():
+        opp_strains.append(factory.strain_id)
+    board = state.board
+    strain = board.lichen_strains
+    lichen = board.lichen
+    for i in range(strain.shape[0]):
+        for k in range(strain.shape[1]):
+            strain_id = strain[i][k]
+            if strain_id in my_strains:
+                value += lichen[i][k]/1000
+            if strain_id in opp_strains:
+                value -= lichen[i][k]/1000
+    #print(f"val 1 = {value}")
+    #factory_num:O(e-1)
+    for factory in my_factories.values():
+        value += min(factory.cargo.water/50, 1)
+    for factory in opp_factories.values():
+        value -= min(factory.cargo.water/50, 1)
+    #print(f"val 2 = {value}")
+    #//ここまで相手方の情報を考慮する
+    my_units = state.units[player]
+    #robot_num:O(e-1)
+    for unit in my_units.values():
+        if(unit.unit_type == "LIGHT"):
+            value += 0
+        elif(unit.unit_type == "HEAVY"):
+            value += 0
+    #print(f"val 3 = {value}")
+    #factory_resources:O(e-2)
+    for factory in my_factories.values():
+        cargo = factory.cargo
+        value += cargo.ice/2000 + cargo.water/1000
+        if(factory.cargo.water > 100 - state.real_env_steps):
+            value += 0.01
+    #print(f"val 4 = {value}")
+    #robot_resources:O(e-3)
+    for unit in my_units.values():
+        cargo = unit.cargo
+        value += cargo.ice/4000
+    #print(f"val 5 = {value}")
+    
+    return value
+
 class Agent():
     def __init__(self, player: str, env_cfg: EnvConfig) -> None:
         self.player = player
@@ -408,6 +467,7 @@ class Agent():
         self.a_net = ActionNet()
         self.a_net.to(device)
         self.a_net.load_state_dict(torch.load(model_path, map_location= device))
+        self.post_state_value = 0
 
     def determin_action(self, step:int, obs, remainingOverageTime: int = 60):
         state = obs_to_game_state(step, self.env_cfg, obs)
@@ -421,4 +481,6 @@ class Agent():
         return self.determin_action(step, obs, remainingOverageTime)
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
+        state = obs_to_game_state(step, self.env_cfg, obs)
+        print("statevalue step {0} is {1:3g}, {2:3g}".format(state.real_env_steps, state_value(state, "player_0"), state_value(state, "player_1")))
         return self.determin_action(step, obs, remainingOverageTime)
