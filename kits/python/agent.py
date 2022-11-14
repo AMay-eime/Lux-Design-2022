@@ -109,9 +109,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
     def start_embedder(index):
         return_list = [0 for i in range(token_len)]
         if index == 0:
-            return_list[:token_len//2] = [1 for i in range(token_len//2)]
+            return_list[-1] = 1
         elif index == 1:
-            return_list[token_len//2:] = [1 for i in range(token_len//2)]
+            return_list[-2] = 1
         return return_list
 
     def pos_overrap_factory(state:GameState, pos:np.ndarray):

@@ -90,9 +90,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
     def start_embedder(index):
         return_list = [0 for i in range(token_len)]
         if index == 0:
-            return_list[:token_len//2] = [1 for i in range(token_len//2)]
+            return_list[-1] = 1
         elif index == 1:
-            return_list[token_len//2:] = [1 for i in range(token_len//2)]
+            return_list[-2] = 1
         return return_list
 
     def pos_overrap_factory(state:GameState, pos:np.ndarray):
@@ -207,7 +207,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                     action_value += embedder[i] * tokens[i]
                 action_value = action_value % 6
                 if  action_value < 1:
-                    direction = int(((action_value - 1)*4) % 4)+1
+                    direction = int(((action_value)*4) % 4)+1
                     cost = unit.move_cost(state, direction)
                     if not(cost == None) and unit.power >= cost:
                         action = unit.move(direction, True)
@@ -376,8 +376,8 @@ def env_to_tokens(state:GameState, view_agent):#雑に作る。若干の情報�
 
 #近傍アクション生成機
 def action_nearby_token(token:np.ndarray, variance):
-    random_array = 2 * variance * np.random.rand(*token.shape) - variance
-    token_ = token + random_array
+    random_array = 7 * np.random.rand(*token.shape)
+    token_ = (1 - variance) * token + variance * random_array
     return token_
 
 #stateの評価(技の見せ所)
