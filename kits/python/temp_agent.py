@@ -52,7 +52,7 @@ import math
 import random
 
 #config
-restart_epoch = 0
+restart_epoch =11
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -184,7 +184,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
             action_value = 0
             for i in range(token_len):
                 action_value += embedder[i] * tokens[i]
-            action_value = action_value % 3
+            action_value = action_value * 3 % 3
+            #print(f"favtory {factory.unit_id} action num = {action_value}")
             if action_value < 1:
                 if factory.cargo.metal >= factory.build_heavy_metal_cost(state) and factory.power >= factory.build_heavy_power_cost(state):
                     actions[factory.unit_id] = factory.build_heavy()
@@ -206,9 +207,10 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 action_value = 0
                 for i in range(token_len):
                     action_value += embedder[i] * tokens[i]
-                action_value = action_value % 6
+                action_value = action_value * 6 % 6
+                #print(f"unit {unit.unit_id} action num = {action_value}")
                 if  action_value < 1:
-                    direction = int(((action_value)*4) % 4)+1
+                    direction = int((action_value * 4) % 4)+1
                     cost = unit.move_cost(state, direction)
                     if not(cost == None) and unit.power >= cost:
                         action = unit.move(direction, True)
@@ -230,7 +232,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 elif action_value < 3:
                     #pick_upはiceかoreのみ
                     if unit_on_factory(state, unit):
-                        resource_type = int(((action_value-2)*2) % 2)
+                        resource_type = int(((action_value-2) * 2) % 2)
                         action = unit.pickup(resource_type, 100, False)
                     elif unit.power >= unit.dig_cost(state):
                         action = unit.dig(False)
@@ -262,6 +264,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 action_value += embedder[k]*tokens[k]
             grid = math.ceil(action_value * 48 % 48)
             pos[i] = grid
+        #print(f"set pos = {pos}")
         potential_spawns:np.ndarray = state.board.spawns[agent]
         length = 100
         index = 0
@@ -379,6 +382,7 @@ def env_to_tokens(state:GameState, view_agent):#雑に作る。若干の情報�
 def action_nearby_token(token:np.ndarray, variance):
     random_array = 3 * np.random.rand(*token.shape)
     token_ = (1 - variance) * token + variance * random_array
+    #print(f"token = {token}")
     return token_
 
 #stateの評価(技の見せ所)
@@ -758,7 +762,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.7.0 restart from epoch {restart_epoch}")
+        print(f"ver1.7.1 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
