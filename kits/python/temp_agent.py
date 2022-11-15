@@ -65,9 +65,10 @@ decoder_layers = 6
 epochs = 2000
 swing_range = 100
 results_per_epoch = 3000
-beta_max = 0.5
 batch_size = 16
 
+beta_max = 0.3
+gamma_min = 0.5
 gamma_max = 0.98
 advantage_steps = 10
 
@@ -376,7 +377,7 @@ def env_to_tokens(state:GameState, view_agent):#雑に作る。若干の情報�
 
 #近傍アクション生成機
 def action_nearby_token(token:np.ndarray, variance):
-    random_array = 7 * np.random.rand(*token.shape)
+    random_array = 3 * np.random.rand(*token.shape)
     token_ = (1 - variance) * token + variance * random_array
     return token_
 
@@ -744,7 +745,7 @@ def Train():
         default_net.train()
         search_net.train()
         print("average episode len {0:3g},variance = {3:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), max((1-variance)*gamma_max, 0.1), beta_max * variance, variance))
-        Update(results, action_net, value_net, default_net, search_net, max((1-variance)*gamma_max, 0.1))
+        Update(results, action_net, value_net, default_net, search_net, (1-variance)*gamma_max + variance * gamma_min)
         
         if (i + restart_epoch)%10 == 0:
             torch.save(action_net.state_dict(), f"model_a_{restart_epoch + i}.pth")
@@ -757,7 +758,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.6.3 restart from epoch {restart_epoch}")
+        print(f"ver1.7.0 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
