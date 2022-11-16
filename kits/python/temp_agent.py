@@ -388,7 +388,13 @@ def action_nearby_token(token:np.ndarray, variance):
 #stateの評価(技の見せ所)
 def state_value(state:GameState, view_player):
     player = view_player
-    opp_player = "player_1" if player == "player_0" else "player_0"
+    opp_player = ""
+    if player == "player_0":
+        opp_player = "player_1"
+    elif player == "player_1":
+        opp_player = "player_0"
+    else:
+        print("player out of range")
     value = 0
     factories = state.factories
     my_factories = factories[player]
@@ -443,6 +449,9 @@ def state_value(state:GameState, view_player):
     #print(f"val 5 = {value}")
     
     return value
+
+def action_value(state:GameState, action: dict(str, np.array), view_player:str):
+    pass
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
@@ -750,8 +759,8 @@ def Train():
         value_net.train()
         default_net.train()
         search_net.train()
-        print("average episode len {0:3g},variance = {3:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), max((1-variance)*gamma_max, 0.1), beta_max * variance, variance))
-        Update(results, action_net, value_net, default_net, search_net, (1-variance)*gamma_max + variance * gamma_min)
+        print("average episode len {0:3g},variance = {3:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), (1-variance)*gamma_max + variance*gamma_min, beta_max * variance, variance))
+        Update(results, action_net, value_net, default_net, search_net, (1-variance)*gamma_max + variance*gamma_min)
         
         if (i + restart_epoch)%10 == 0:
             torch.save(action_net.state_dict(), f"model_a_{restart_epoch + i}.pth")
