@@ -675,8 +675,10 @@ def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:Cust
     running_loss_v = 0.0
     running_loss_s = 0.0
     v_total = 0.0
+    total_batch = 0
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     for j, (s, a, v) in enumerate(train_loader, 0):
+        total_batch += 1
         a_optimiser.zero_grad()
         v_optimizer.zero_grad()
         s_optimizer.zero_grad()
@@ -706,14 +708,14 @@ def Update(results, a_net:ActionNet, v_net:ValueNet, d_net:CustomNet, s_net:Cust
         s_loss.backward()
         s_optimizer.step()
         running_loss_s += s_loss.item()
-        if(j % 1000 == 50):
-            print("running loss [v: {0:.3g}, a: {1:.3g}, s: {2:.3g}]"\
-                .format(running_loss_v/50, running_loss_a/50, running_loss_s/50))
-            print("value ave {0:3g}".format(v_total/50))
-            running_loss_a = 0.0
-            running_loss_v = 0.0
-            running_loss_s = 0.0
-            v_total = 0.0
+    print("running loss [v: {0:.3g}, a: {1:.3g}, s: {2:.3g}]"\
+        .format(running_loss_v/total_batch, running_loss_a/total_batch, running_loss_s/total_batch))
+    print("value ave {0:3g}".format(v_total/total_batch))
+    running_loss_a = 0.0
+    running_loss_v = 0.0
+    running_loss_s = 0.0
+    v_total = 0.0
+    total_batch = 0
     print("updated")
 
 def Train():
