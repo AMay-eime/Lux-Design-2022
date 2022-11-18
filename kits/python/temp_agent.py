@@ -2,6 +2,7 @@ from lux.kit import obs_to_game_state, GameState, EnvConfig, Team, Factory, Unit
 from lux.utils import direction_to
 import numpy as np
 import sys
+from typing import Dict
 
 class Agent():
     def __init__(self, player: str, env_cfg: EnvConfig) -> None:
@@ -52,7 +53,7 @@ import math
 import random
 
 #config
-restart_epoch =11
+restart_epoch = 0
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -72,11 +73,27 @@ gamma_min = 0.5
 gamma_max = 0.98
 advantage_steps = 10
 
+#盤面の評価に使える便利所たち
+def resoure_exist(g_state:GameState, pos:np.ndarray, resource_type):#type = 1(ice) 0(ore)
+        ice_existance = g_state.board.ice[pos[1]][pos[0]]
+        ore_existance = g_state.board.ore[pos[1]][pos[0]]
+        if resource_type == 0:
+            return ice_existance == 1
+        elif resource_type == 1:
+            return ore_existance == 1
+        else:
+            print("resouce what")
+
+def factory_adj_grids(factory:Factory):
+    direction_list = np.array([[0,2], [1,2], [-1,2], [2,0], [2,-1], [2,1], [-2,1], [-2,0], [-2,-1], [0,-2], [1,-2], [-1,-2]])
+    return [factory.pos + direction_list[i] for i in range(direction_list.shape[0])]
+
 #便利な変換する奴らたち
-def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
+def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
     my_factories = state.factories[agent]
     my_units = state.units[agent]
     env_cfg:EnvConfig = state.env_cfg
+ 
     def factory_embedder(index):
         return_list = [0 for i in  range(token_len)]
         return_list[index + 1] = 1
@@ -96,9 +113,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
             return_list[-2] = 1
         return return_list
 
-    def pos_overrap_factory(state:GameState, pos:np.ndarray):
+    def pos_overrap_factory(g_state:GameState, pos:np.ndarray):
         factories = []
-        for item in state.factories.values():
+        for item in g_state.factories.values():
             factories.extend(list(item.values()))
         for factory in factories:
             factory_pos = factory.pos
@@ -106,9 +123,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 return True
         return False
 
-    def unit_on_factory(state:GameState, unit:Unit):
+    def unit_on_factory(g_state:GameState, unit:Unit):
         team_name = f"player_{unit.team_id}"
-        factories = state.factories[team_name].values()
+        factories = g_state.factories[team_name].values()
         for factory in factories:
             unit_pos = unit.pos
             factory_pos = factory.pos
@@ -116,9 +133,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                 return True
         return False
 
-    def unit_adjascent_factory(state:GameState, unit:Unit):
+    def unit_adjascent_factory(g_state:GameState, unit:Unit):
         team_name = f"player_{unit.team_id}"
-        factories = state.factories[team_name].values()
+        factories = g_state.factories[team_name].values()
         for factory in factories:
             unit_pos = unit.pos
             factory_pos = factory.pos
@@ -133,42 +150,63 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
         else:
             return unit.action_queue[0]
 
-    def rulebased_factory(state:GameState, factory:Factory):
+    def rulebased_factory(g_state:GameState, factory:Factory):
         action = None
-        if factory.cargo.water - (env_cfg.max_episode_length - state.env_steps) >\
-            factory.water_cost(state) * (env_cfg.max_episode_length - state.env_steps):
+        if factory.cargo.water - (env_cfg.max_episode_length - g_state.env_steps) >\
+            factory.water_cost(g_state) * (env_cfg.max_episode_length - g_state.env_steps):
             print("rb watering")
             action = factory.water()
         return action
 
-    def rulebased_unit(state:GameState, unit:Unit):
+    def log_calc(g_state:GameState, unit:Unit, log:list):
+        unit_cfg = unit.unit_cfg
+        if len(log) < 2:
+            print("error, not much log len")
+        direction = direction_to(log[0], log[1])
+        return_cost = 0
+        return_cost += (len(log)-1) * unit_cfg.MOVE_COST
+        rubble_map = g_state.board.rubble
+        for i in range(1, len(log) - 1):
+            pos = log[i]
+            return_cost += rubble_map[pos[1]][pos[0]] * unit_cfg.RUBBLE_MOVEMENT_COST
+        
+        return unit.move(direction), return_cost
+
+    def rulebased_unit(g_state:GameState, unit:Unit):
         action = None
-        if unit_on_factory(state, unit) and unit.power < unit.dig_cost(state) * 3:
-            #print(f"rb pickup id = {unit.unit_id}")
+        adj, factory = unit_adjascent_factory(g_state, unit)
+        if unit_on_factory(g_state, unit) and unit.power < unit.dig_cost(g_state) * 3:
+            #print(f"{unit.unit_id} rb pickup")
             action = unit.pickup(4, 50 if unit.unit_type == "LIGHT" else 100, True)
-        adj, factory = unit_adjascent_factory(state, unit)
-        if adj:
+        elif adj:
             direction_factory = direction_to(unit.pos, factory.pos)
-            if unit.power < unit.dig_cost(state) + unit.move_cost(state, direction_factory) and\
-                unit.move_cost(state, direction_factory) + unit.action_queue_cost(state) < unit.power:
+            if unit.power < unit.dig_cost(g_state) * 2 + unit.move_cost(g_state, direction_factory) and\
+                unit.move_cost(g_state, direction_factory) + unit.action_queue_cost(g_state) < unit.power:
                 action = unit.move(direction_factory)
-                #print(f"rb move dir = {direction_factory} from {unit.pos} to {factory.pos}, id = {unit.unit_id}")
-            else:
+                #print(f"{unit.unit_id} rb move dir = {direction_factory} from {unit.pos} to {factory.pos}")
+            elif unit.power >= unit.dig_cost(g_state) + unit.move_cost(g_state, direction_factory):
                 pos = unit.pos
-                ice_existance = state.board.ice[pos[1]][pos[0]]
-                ore_existance = state.board.ore[pos[1]][pos[0]]
-                if state.board.ice[pos[1]][pos[0]] == 1 or state.board.ore[pos[1]][pos[0]] == 1:
-                    #print(f"rb dig rubble = {state.board.rubble[pos[1]][pos[0]]} pos = {pos}, ice = {unit.cargo.ice}, ore = {unit.cargo.ore}")
-                    #print(f"ice = {state.board.ice[pos[1]][pos[0]]}, ore = {state.board.ore[pos[1]][pos[0]]}, id = {unit.unit_id}")
+                if resoure_exist(g_state, pos, 0) or resoure_exist(g_state, pos, 1):
+                    print(f"{unit.unit_id} rb dig rubble = {g_state.board.rubble[pos[1]][pos[0]]} pos = {pos}, ice = {unit.cargo.ice}, ore = {unit.cargo.ore}")
+                    print(f"ice = {g_state.board.ice[pos[1]][pos[0]]}, ore = {g_state.board.ore[pos[1]][pos[0]]}")
                     action = unit.dig(True)
             if unit.cargo.ice > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
                 not all(unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos))):
                 action = unit.transfer(direction_factory, 0, unit.cargo.ice, False)
-                #print(f"rb passing ice {unit.cargo.ice}, id = {unit.unit_id}")
+                #print(f"{unit.unit_id} rb passing ice {unit.cargo.ice}")
             if unit.cargo.ore > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
                 not all(unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos))):
                 action = unit.transfer(direction_factory, 1, unit.cargo.ore, False)
-                #print(f"rb passing ore {unit.cargo.ore}, id = {unit.unit_id}")
+                #print(f"{unit.unit_id} rb passing ore {unit.cargo.ore}")
+        elif not unit_on_factory(g_state, unit):
+            return_action, cost = log_calc(g_state, unit, unit_log[unit.unit_id])
+            if unit.power < cost + unit.unit_cfg.MOVE_COST * 10 + unit.unit_cfg.DIG_COST and unit.power >= unit.unit_cfg.MOVE_COST:
+                action = return_action
+                #print(f"{unit.unit_id} remote return len {len(unit_log[unit.unit_id])-1} where {unit.pos}")
+            elif unit.power >= unit.unit_cfg.DIG_COST and (resoure_exist(g_state, unit.pos, 0) or resoure_exist(g_state, unit.pos, 1)):
+                action = unit.dig(True)
+                #print(f"{unit.unit_id} remote dig pow {unit.power}")
+
         return action
 
     tokens = tokens.squeeze(0)
@@ -215,20 +253,31 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent):
                     if not(cost == None) and unit.power >= cost:
                         action = unit.move(direction, True)
                 elif action_value < 2:
-                    #transferはiceかoreのみ
-                    resource_type = int(((action_value-1)*3) % 3)
-                    direction = int(((action_value - 1)*20) % 4)+1
-                    direction_vec = [((direction+1)//2)*(3-direction), ((direction)//2)*(direction-2)]
-                    destination = [unit.pos[0] + direction_vec[0], unit.pos[1] + direction_vec[1]]
-                    if -1 < destination[0] and destination[0] < env_cfg.map_size and -1 < destination[1] and destination[1] < env_cfg.map_size:
-                        if resource_type == 0:
-                            action = unit.transfer(direction, 0, unit.cargo.ice, False)
-                        elif resource_type == 1:
-                            action = unit.transfer(direction, 1, unit.cargo.ore, False)
-                        elif resource_type == 2:
-                            action = unit.transfer(direction, 4, unit.power//2, False)
+                    #transferはrule_based
+                    direction_dict = {1:[0,-1], 2:[1, 0], 3:[0,-1], 4:[-1,0]}
+                    is_adj, factory = unit_adjascent_factory(state, unit)
+                    if is_adj:
+                        direction = direction_to(unit.pos, factory.pos)
+                        resource_type = 0 if unit.cargo.ice > 0 else 1
+                        amount = unit.cargo.ice if resource_type == 0 else unit.cargo.ore
+                        action = unit.transfer(direction, resource_type, amount, False)
+                        #if unit.cargo.ice>0 or unit.cargo.ore>0:
+                            #print(f"{unit.unit_id} tarnser to {factory.unit_id}, {resource_type} {amount}")
+                    else:
+                        unit_list = []
+                        for my_unit in my_units.values():
+                            if abs(unit.pos[0]-my_unit.pos[0])+abs(unit.pos[1]-my_unit.pos[1])==1:
+                                unit_list.append(my_unit)
+                        if len(unit_list) == 0:
+                            pass
                         else:
-                            print("どのリソースをtransferするん？")
+                            target_unit:Unit = unit_list[random.randint(0, len(unit_list)-1)]
+                            direction = direction_to(unit.pos, target_unit.pos)
+                            resource_type = 0 if unit.cargo.ice > 0 else 1
+                            amount = unit.cargo.ice if resource_type == 0 else unit.cargo.ore
+                            action = unit.transfer(direction, resource_type, amount, False)
+                            #if unit.cargo.ice or unit.cargo.ore:
+                                #print(f"{unit.unit_id} tarnser to {target_unit.unit_id}, {resource_type} {amount}")
                 elif action_value < 3:
                     #pick_upはiceかoreのみ
                     if unit_on_factory(state, unit):
@@ -400,7 +449,7 @@ def state_value(state:GameState, view_player):
     my_factories = factories[player]
     opp_factories = factories[opp_player]
     #alive:O(e0)
-    value += state.real_env_steps/1000
+    value += state.real_env_steps/100
     #print(f"val 0 = {value}")
     #lichens:O(e0)
     my_strains = []
@@ -418,13 +467,13 @@ def state_value(state:GameState, view_player):
             if strain_id in my_strains:
                 value += lichen[i][k]/1000
             if strain_id in opp_strains:
-                value -= lichen[i][k]/1000
+                value -= lichen[i][k]/2000
     #print(f"val 1 = {value}")
     #factory_num:O(e-1)
     for factory in my_factories.values():
-        value += min(factory.cargo.water/50, 1)
+        value += min(factory.cargo.water/50, 1)/10
     for factory in opp_factories.values():
-        value -= min(factory.cargo.water/50, 1)
+        value -= min(factory.cargo.water/50, 1)/20
     #print(f"val 2 = {value}")
     #//ここまで相手方の情報を考慮する
     my_units = state.units[player]
@@ -441,6 +490,11 @@ def state_value(state:GameState, view_player):
         value += cargo.ice/2000 + cargo.water/1000
         if(factory.cargo.water > 100 - state.real_env_steps):
             value += 0.01
+        adj_grids = factory_adj_grids(factory)
+        for grid in adj_grids:
+            if resoure_exist(state, grid, 0):
+                value += 0.05
+                #print(f"{factory.pos}, has ice in {grid}")
     #print(f"val 4 = {value}")
     #robot_resources:O(e-3)
     for unit in my_units.values():
@@ -450,8 +504,25 @@ def state_value(state:GameState, view_player):
     
     return value
 
-def action_value(state:GameState, action: dict(str, np.array), view_player:str):
-    pass
+def action_value(state:GameState, action:Dict[str, np.ndarray], view_agent):
+    value = 0
+
+    my_units = state.units[view_agent]
+    #資源の上を掘ったら報酬(e-2)
+    for unit_id, unit in my_units.items():
+        if unit.power > unit.dig_cost(state) * 2 and ((unit_id in action.keys() and (all(action[unit_id][0] == unit.dig(True)) or all(action[unit_id][0] == unit.dig(False)))) or\
+            (not(unit_id in action.keys()) and len(unit.action_queue) > 0 and (all(unit.action_queue[0] == unit.dig(True)) or all(unit.action_queue[0] == unit.dig(False))))):
+            pos = unit.pos
+            ice_map = state.board.ice
+            ore_map = state.board.ore
+            if ice_map[pos[1]][pos[0]] > 0:
+                value += 0.01
+                #print("digging ice")
+            elif ore_map[pos[1]][pos[0]] > 0:
+                value += 0.005
+                #print("digging ore")
+
+    return value
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
@@ -557,6 +628,34 @@ class DataSet(torch.utils.data.Dataset):
         return len(self.s)
 
 def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, beta):
+    def unit_on_factory(state:GameState, unit:Unit):
+        team_name = f"player_{unit.team_id}"
+        factories = state.factories[team_name].values()
+        for factory in factories:
+            unit_pos = unit.pos
+            factory_pos = factory.pos
+            if abs(unit_pos[0]-factory_pos[0]) < 2 and abs(unit_pos[1]-factory_pos[1]) < 2:
+                return True
+        return False
+   
+    def log_addition(log:list, pos:np.ndarray):
+        def check_is_inlog():
+            exist = False
+            index = -1
+            for i in range(len(log)):
+                if (pos == log[i]).all():
+                    exist = True
+                    index = i
+                    break
+            return exist, index
+
+        exist, index = check_is_inlog()
+        if exist:
+            return log[index:]
+        else:
+            log.insert(0, pos)
+            return log
+
     def check_is_finished(state:GameState, game_len):
         finished = False
         cause:str = ""
@@ -575,6 +674,8 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
     env_cfg = env.env_cfg
     obs = env.reset(seed = seed)["player_0"]
     state = obs_to_game_state(step, env_cfg, obs)
+    unit_log_0 = {}
+    unit_log_1 = {}
     state_tokens_0 = env_to_tokens(state, "player_0")
     state_tokens_1 = env_to_tokens(state, "player_1")
     state_value_0 = state_value(state, "player_0")
@@ -586,6 +687,20 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
     actions_1 = []
     returns_1 = []
     while not check_is_finished(state, env_cfg.max_episode_length)[0]:#環境が終わるまで
+        #まずはlogの更新から
+        units_0 = state.units["player_0"]
+        for unit in units_0.values():
+            if not(unit.unit_id in unit_log_0.keys()) or unit_on_factory(state, unit):
+                unit_log_0[unit.unit_id] = [unit.pos]
+            else:
+                unit_log_0[unit.unit_id] = log_addition(unit_log_0[unit.unit_id], unit.pos)
+        units_1 = state.units["player_1"]
+        for unit in units_1.values():
+            if not(unit.unit_id in unit_log_1.keys()) or unit_on_factory(state, unit):
+                unit_log_1[unit.unit_id] = [unit.pos]
+            else:
+                unit_log_1[unit.unit_id] = log_addition(unit_log_1[unit.unit_id], unit.pos)
+
         state_tokens_0 = torch.from_numpy(env_to_tokens(state, "player_0")).float().to(device)
         state_tokens_1 = torch.from_numpy(env_to_tokens(state, "player_1")).float().to(device)
         a_0_t = a_net(state_tokens_0)
@@ -624,7 +739,11 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
                 search_mse_1 = search_mse_1_
         actions_0.append(a_0)
         actions_1.append(a_1)
-        real_actions = {"player_0":tokens_to_actions(state, a_0, "player_0"), "player_1":tokens_to_actions(state, a_1, "player_1")}
+        real_actions_0 = tokens_to_actions(state, a_0, "player_0", unit_log_0)
+        action_value_0 = action_value(state, real_actions_0, "player_0")
+        real_actions_1 = tokens_to_actions(state, a_1, "player_1", unit_log_1)
+        action_value_1 = action_value(state, real_actions_1, "player_1")
+        real_actions = {"player_0":real_actions_0, "player_1":real_actions_1}
         obs = env.step(real_actions)[0]["player_0"]
         step += 1
         state = obs_to_game_state(step, env_cfg, obs)
@@ -633,10 +752,10 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
         states_0.append(state_tokens_0)
         states_1.append(state_tokens_1)
         state_value_0_ = state_value(state, "player_0")
-        returns_0.append(state_value_0_ - state_value_0)
+        returns_0.append(state_value_0_ - state_value_0 + action_value_0)
         state_value_0 = state_value_0_
         state_value_1_ = state_value(state, "player_1")
-        returns_1.append(state_value_1_ - state_value_1)
+        returns_1.append(state_value_1_ - state_value_1 + action_value_1)
         state_value_1 = state_value_1_
         #print(f"0 return = {returns_0[-1]} value = {state_value_0}")
         #print(f"1 return = {returns_1[-1]} value = {state_value_1}")             
@@ -759,8 +878,8 @@ def Train():
         value_net.train()
         default_net.train()
         search_net.train()
-        print("average episode len {0:3g},variance = {3:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), (1-variance)*gamma_max + variance*gamma_min, beta_max * variance, variance))
-        Update(results, action_net, value_net, default_net, search_net, (1-variance)*gamma_max + variance*gamma_min)
+        print("average episode len {0:3g},variance = {3:3g}, gamma = {1:3g}, beta = {2:3g}".format(results_num/len(results), gamma_max, beta_max * variance, variance))
+        Update(results, action_net, value_net, default_net, search_net, gamma_max)
         
         if (i + restart_epoch)%10 == 0:
             torch.save(action_net.state_dict(), f"model_a_{restart_epoch + i}.pth")
