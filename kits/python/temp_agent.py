@@ -1,5 +1,5 @@
 from lux.kit import obs_to_game_state, GameState, EnvConfig, Team, Factory, Unit, UnitCargo
-from lux.utils import direction_to
+from lux.utils import direction_to, is_the_same_action
 import numpy as np
 import sys
 from typing import Dict
@@ -55,19 +55,19 @@ import math
 import random
 
 #config
-restart_epoch = 0
+restart_epoch = 31
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
 env_token_num = 10
 action_token_num = 2
 
-heads = 6
+heads = 0
 encoder_layers = 6
 decoder_layers = 6
 epochs = 2000
 swing_range = 100
-results_per_epoch = 3000
+results_per_epoch = 5000
 batch_size = 16
 
 beta_max = 0.3
@@ -75,6 +75,10 @@ beta_min = 0.1
 gamma_min = 0.5
 gamma_max = 0.98
 advantage_steps = 10
+
+#rule basedを制御する変数
+target_light_num = 3
+factory_territory = 2
 
 #盤面の評価に使える便利所たち
 def resoure_exist(g_state:GameState, pos:np.ndarray, resource_type):#type = 1(ice) 0(ore)
@@ -109,6 +113,15 @@ def unit_on_factory(g_state:GameState, unit:Unit):
             return True, factory
     return False, None
 
+def pos_on_factory(g_state:GameState, pos:np.ndarray):
+    factories = list(g_state.factories["player_1"].values())
+    factories.extend(list(g_state.factories["player_0"].values()))
+    for factory in factories:
+        factory_pos = factory.pos
+        if abs(pos[0]-factory_pos[0]) < 2 and abs(pos[1]-factory_pos[1]) < 2:
+            return True, factory
+    return False, None
+
 #便利な変換する奴らたち
 def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
     my_factories = state.factories[agent]
@@ -140,7 +153,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             factories.extend(list(item.values()))
         for factory in factories:
             factory_pos = factory.pos
-            if abs(pos[0]-factory_pos[0]) < 5 and abs(pos[1]-factory_pos[1]) < 5:
+            if abs(pos[0]-factory_pos[0]) < 3 + factory_territory*2 and abs(pos[1]-factory_pos[1]) < 3 + factory_territory*2:
                 return True
         return False
 
@@ -163,8 +176,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
 
     def rulebased_factory(g_state:GameState, factory:Factory):
         action = None
-        if factory.cargo.water - (env_cfg.max_episode_length - g_state.env_steps) >\
-            factory.water_cost(g_state) * (env_cfg.max_episode_length - g_state.env_steps):
+        if factory.cargo.water - (env_cfg.max_episode_length - g_state.real_env_steps) >\
+            factory.water_cost(g_state) * (env_cfg.max_episode_length - g_state.real_env_steps):
             #print("rb watering")
             action = factory.water()
         elif factory.cargo.metal >= factory.build_heavy_metal_cost(state) and factory.power >= factory.build_heavy_power_cost(state):
@@ -189,13 +202,102 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         action = None
         adj, factory = unit_adjascent_factory(g_state, unit)
         is_on, factory_on = unit_on_factory(g_state, unit)
+        exist, factory_base = pos_on_factory(g_state, unit_log[unit.unit_id][0][-1])
+
+        if unit.unit_type == "LIGHT":
+            search_list = np.array([[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[-1,1],[1,-1],[2,0],[-2,0],[0,2],[0,-2]])
+            heavy_list = []
+            target_pos = None
+            for unit_ in state.units["player_1"].values():
+                if unit_.unit_type == "HEAVY":
+                    heavy_list.append(unit_.pos)
+            for unit_ in state.units["player_0"].values():
+                if unit_.unit_type == "HEAVY":
+                    heavy_list.append(unit_.pos)
+            for i in range(search_list.shape[0]):
+                pos = unit.pos + search_list[i]
+                for pos_ in heavy_list:
+                    if all(pos == pos_):
+                        target_pos = pos
+                        break
+                if not(target_pos is None):
+                    break
+            if not(target_pos is None):
+                action = unit.move(direction_to(target_pos, unit.pos))
+
+        if unit.unit_type == "HEAVY":
+            #隣に敵のHEAVYがいる場合は突進する(この判定は独自に行う（優先度最低）
+            enemy_team_id = "player_1" if unit.team_id == "player_0" else "player_0"
+            enemy_units = g_state.units[enemy_team_id].values()
+            target_unit = None
+            for enemy_unit in enemy_units:
+                ds = [enemy_unit.pos[0] - unit.pos[0], enemy_unit.pos[1] - unit.pos[1]]
+                dist = abs(ds[0]) + abs(ds[1])
+                if dist == 1 and enemy_unit.unit_type == "HEAVY":
+                    target_unit = enemy_unit
+            if not(target_unit is None):
+                print(f"in {g_state.real_env_steps}, {unit.unit_id} charges {target_unit.unit_id}!")
+                action = unit.move(direction_to(unit.pos, target_unit.pos))
+        if unit.unit_type == "HEAVY" and exist and (factory_base.cargo.water < 100 or env_cfg.max_episode_length * 0.8< g_state.env_steps):
+            #初期生産でかつ水資源に余裕がなければ所属ファクトリー周辺の水資源を探す(生存本能でないから優先度は低い)
+            #さらに、最後の方では水やりをするためにたっぷり水を確保してくる
+            search_center = factory_base.pos
+            adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
+            second_adj_vecs = np.array([[3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
+            ice_pos = None
+            for i in range(adj_vecs.shape[0]):
+                target_pos = search_center + adj_vecs[i]
+                if target_pos[0] < 0 or env_cfg.map_size-1 < target_pos[0] or target_pos[1] < 0 or env_cfg.map_size-1 < target_pos[1]:
+                    continue
+                if resoure_exist(g_state, search_center + adj_vecs[i], 0):
+                    ice_pos = search_center+adj_vecs[i]
+                    break
+            if ice_pos is None:
+                for i in range(second_adj_vecs.shape[0]):
+                    target_pos = search_center + second_adj_vecs[i]
+                    if target_pos[0] < 0 or env_cfg.map_size-1 < target_pos[0] or target_pos[1] < 0 or env_cfg.map_size-1 < target_pos[1]:
+                        continue
+                    if resoure_exist(g_state, search_center + second_adj_vecs[i], 0):
+                        ice_pos = search_center+second_adj_vecs[i]
+                        break
+            if not (ice_pos is None):
+                #print(f"{unit.unit_id} is assigned {factory_base.unit_id} found ice at {ice_pos}")
+                action = unit.move(direction_to(unit.pos, ice_pos))
+        elif unit.unit_type == "HEAVY" and exist:
+            #場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
+            total_light_num = 0
+            for unit_ in my_units.values():
+                if unit_.unit_type == "LIGHT":
+                    total_light_num += 1
+            if total_light_num < target_light_num:
+                search_center = factory_base.pos
+                adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
+                second_adj_vecs = np.array([[3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
+                ore_pos = None
+                for i in range(adj_vecs.shape[0]):
+                    target_pos = search_center + adj_vecs[i]
+                    if target_pos[0] < 0 or env_cfg.map_size-1 < target_pos[0] or target_pos[1] < 0 or env_cfg.map_size-1 < target_pos[1]:
+                        continue
+                    if resoure_exist(g_state, search_center + adj_vecs[i], 1):
+                        ore_pos = search_center+adj_vecs[i]
+                        break
+                if ore_pos is None:
+                    for i in range(second_adj_vecs.shape[0]):
+                        target_pos = search_center + second_adj_vecs[i]
+                        if target_pos[0] < 0 or env_cfg.map_size-1 < target_pos[0] or target_pos[1] < 0 or env_cfg.map_size-1 < target_pos[1]:
+                            continue
+                        if resoure_exist(g_state, search_center + second_adj_vecs[i], 1):
+                            ore_pos = search_center+second_adj_vecs[i]
+                            break
+                if not (ore_pos is None):
+                    action = unit.move(direction_to(unit.pos, ore_pos))
+
         if is_on and factory_on.power > 100 and unit.power < unit.unit_cfg.DIG_COST * 3:
             #print(f"{unit.unit_id} rb pickup")
             action = unit.pickup(4, min(unit.unit_cfg.DIG_COST * 5, factory_on.power), True)
         elif adj:
             direction_factory = direction_to(unit.pos, factory.pos)
-            if unit.power < unit.dig_cost(g_state) * 2 + unit.move_cost(g_state, direction_factory) and\
-                unit.move_cost(g_state, direction_factory) + unit.action_queue_cost(g_state) < unit.power:
+            if unit.power < unit.dig_cost(g_state) * 2 + unit.move_cost(g_state, direction_factory):
                 action = unit.move(direction_factory)
                 #print(f"{unit.unit_id} rb move dir = {direction_factory} from {unit.pos} to {factory.pos}")
             elif unit.power >= unit.dig_cost(g_state) + unit.move_cost(g_state, direction_factory):
@@ -222,8 +324,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     #すごく強くなるようならここを取る。
                     action = unit.dig(True)
                     #print(f"{unit.unit_id} remote dig pow {unit.power}")
-            #else:
-                #print(f"{state.real_env_steps} {unit.unit_id} log is {unit_log[unit.unit_id]}, on factory {unit_on_factory(g_state, unit)} pos {unit.pos}")
 
         return action
 
@@ -259,7 +359,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             action_value = action_value * 3 % 3
             #print(f"favtory {factory.unit_id} action num = {action_value}")
             if action_value < 1:
-                if factory.cargo.metal >= factory.build_light_metal_cost(state) and factory.power >= factory.build_heavy_power_cost(state):
+                if factory.cargo.metal >= factory.build_light_metal_cost(state) and factory.power >= factory.build_light_power_cost(state)\
+                    and state.env_steps > env_cfg.max_episode_length/3:
                     actions[factory.unit_id] = factory.build_light()
             elif action_value < 3:
                 pass
@@ -344,7 +445,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 else:
                     print("error-tipo")
             
-            if not (action is None) and not all(action == unit_next_action(unit)):
+            #print(f"`{unit.unit_id}, {action}, {unit_next_action(unit)}")
+            if not (action is None) and not is_the_same_action(action, unit_next_action(unit)):
+                #print("change")
                 actions[unit.unit_id] = [action]
 
     elif state.env_steps != 0:
@@ -474,10 +577,16 @@ def env_to_tokens(state:GameState, unit_log, view_agent):#雑に作る。若干�
     #ラスト基本情報
     basics = np.zeros((1, token_len))
     basics[0][0] = state.real_env_steps / state.env_cfg.max_episode_length
-    if state.env_cfg.max_episode_length - state.env_steps > token_len - 1:
-        basics[0][1:-1] = state.weather_schedule[state.env_steps:state.env_steps+token_len-2]
+    if state.real_env_steps < 0:
+        pass
+    elif state.env_cfg.max_episode_length - state.real_env_steps > token_len - 1:
+        #print(state.weather_schedule[state.real_env_steps:state.real_env_steps+token_len-1])
+        basics[0][1:] = state.weather_schedule[state.real_env_steps:state.real_env_steps+token_len-1]
+    elif state.real_env_steps < 1000:
+        #print(state.weather_schedule[state.real_env_steps:])
+        basics[0][1:1+state.env_cfg.max_episode_length - state.real_env_steps] = state.weather_schedule[state.real_env_steps:]
     else:
-        basics[0][1:1+state.env_cfg.max_episode_length - state.env_steps] = state.weather_schedule[state.env_steps:]
+        print("real steps over 1000")
     tokens = np.concatenate((tokens, basics))
     
     return tokens
@@ -716,7 +825,7 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
             if len(factory) == 0 and state.real_env_steps > 0:
                 finished = True
                 cause += f"[{agent} down] "
-        if state.env_steps == game_len - 1:
+        if state.real_env_steps == game_len:
             finished = True
             cause += f"[env leached last]"
         return finished, cause
@@ -965,7 +1074,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.9.0 restart from epoch {restart_epoch}")
+        print(f"ver1.11.0 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
