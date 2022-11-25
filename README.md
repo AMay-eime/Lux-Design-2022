@@ -25,7 +25,7 @@ pip install --upgrade luxai2022
 ```
 
 
-To verify your installation, you can run the CLI tool by replacing `path/to/bot/main.py` with a path to a bot (e.g. the `starter kit in kits/python/main.py`) and run
+To verify your installation, you can run the CLI tool by replacing `path/to/bot/main.py` with a path to a bot (e.g. the starter kit in `kits/python/main.py`) and run
 
 ```
 luxai2022 path/to/bot/main.py path/to/bot/main.py -v 2 -o replay.json
@@ -49,6 +49,8 @@ To stay up to date on changes and updates to the competition and the engine, wat
 
 ## Community Tools
 As the community builds tools for the competition, we will post them here!
+
+3rd Party Viewer - https://github.com/jmerle/lux-eye-2022
 
 ## Contributing
 See the [guide on contributing](https://github.com/Lux-AI-Challenge/Lux-Design-2022/blob/main/CONTRIBUTING.md)
