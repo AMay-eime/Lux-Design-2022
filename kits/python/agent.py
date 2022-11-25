@@ -199,6 +199,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             action = factory.water()
         elif factory.cargo.metal >= factory.build_heavy_metal_cost(state) and factory.power >= factory.build_heavy_power_cost(state):
             action = factory.build_heavy()
+        elif factory.cargo.metal >= factory.build_light_metal_cost(state) and factory.power >= factory.build_light_power_cost(state):
+            action = factory.build_light()
         return action
 
     def log_calc(g_state:GameState, unit:Unit, log:list):
@@ -466,7 +468,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if not (action is None) and not is_the_same_action(action, unit_next_action(unit)):
                 #print("change")
                 actions[unit.unit_id] = [action]
-
     elif state.env_steps != 0:
         def check_is_in(target_position:np.ndarray, position_array:np.ndarray):
             is_in = False
@@ -521,7 +522,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
     else:
         actions = dict(faction="AlphaStrike", bid = 0)
 
-    print(f"actions = {actions}")
+    #print(f"actions = {actions}")
     return actions
 
 def env_to_tokens(state:GameState, unit_log, view_agent):#雑に作る。若干の情報のオーバーラップは仕方なし。
@@ -735,7 +736,19 @@ class Agent():
                 return (log[0], direction_to(log[0][1], log[0][0]))
         state = obs_to_game_state(step, self.env_cfg, obs)
         my_units = state.units[self.player]
+        enemy_units = state.units[self.opp_player]
         for unit in my_units.values():
+            is_on, factory = unit_on_factory(state, unit)
+            if not(unit.unit_id in self.unit_log.keys()):
+                self.unit_log[unit.unit_id] = ([unit.pos], random.randint(1, 4))
+            elif is_on:
+                direction = direction_to(factory.pos, unit.pos)
+                if direction == 0:
+                    direction = random.randint(1, 4)
+                self.unit_log[unit.unit_id] = ([unit.pos], direction)
+            else:
+                self.unit_log[unit.unit_id] = log_addition(self.unit_log[unit.unit_id], unit.pos)
+        for unit in enemy_units.values():
             is_on, factory = unit_on_factory(state, unit)
             if not(unit.unit_id in self.unit_log.keys()):
                 self.unit_log[unit.unit_id] = ([unit.pos], random.randint(1, 4))
@@ -764,6 +777,4 @@ class Agent():
         return self.determin_action(step, obs, remainingOverageTime)
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
-        state = obs_to_game_state(step, self.env_cfg, obs)
-        print("statevalue step {0} is {1:3g}, {2:3g}".format(state.real_env_steps, state_value(state, "player_0"), state_value(state, "player_1")))
         return self.determin_action(step, obs, remainingOverageTime)

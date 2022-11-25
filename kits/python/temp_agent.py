@@ -79,7 +79,7 @@ advantage_steps = 10
 #rule basedを制御する変数
 target_light_num = 3
 factory_territory = 2
-least_water_storage = 400
+least_water_storage = 500
 
 #盤面の評価に使える便利所たち
 def resoure_exist(g_state:GameState, pos:np.ndarray, resource_type):#type = 1(ice) 0(ore)
@@ -183,6 +183,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             action = factory.water()
         elif factory.cargo.metal >= factory.build_heavy_metal_cost(state) and factory.power >= factory.build_heavy_power_cost(state):
             action = factory.build_heavy()
+        elif factory.cargo.metal >= factory.build_light_metal_cost(state) and factory.power >= factory.build_light_power_cost(state)\
+            and g_state.env_steps > env_cfg.max_episode_length/5:
+            action = factory.build_light()
         return action
 
     def log_calc(g_state:GameState, unit:Unit, log:list):
@@ -227,7 +230,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 action = unit.move(direction_to(target_pos, unit.pos))
 
         if unit.unit_type == "HEAVY":
-            #隣に敵のHEAVYがいる場合は突進する(この判定は独自に行う（優先度最低）
             enemy_team_id = "player_1" if unit.team_id == 0 else "player_0"
             enemy_units = g_state.units[enemy_team_id].values()
             target_unit = None
@@ -236,9 +238,13 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 dist = abs(ds[0]) + abs(ds[1])
                 if dist == 1 and enemy_unit.unit_type == "HEAVY":
                     target_unit = enemy_unit
-            if not(target_unit is None):
-                print(f"in {g_state.real_env_steps}, {unit.unit_id} charges {target_unit.unit_id}!")
+            if not(target_unit is None):#隣に敵のHEAVYがいる場合は突進する(この判定は独自に行う（優先度最低）
+                #print(f"in {g_state.real_env_steps}, {unit.unit_id} charges {target_unit.unit_id}!")
                 action = unit.move(direction_to(unit.pos, target_unit.pos))
+            elif rubble_num(state, unit.pos) > 0:#隣に敵がいない時足元にrubbleがあれば採掘します。
+                action = unit.dig()
+            if adj and exist and not(factory.unit_id == factory_base.unit_id):#隣が所属外のfactoryであれば引き返します。
+                action = log_calc(state, unit, unit_log[unit.unit_id][0])[0]
         if unit.unit_type == "HEAVY" and exist and (factory_base.cargo.water < least_water_storage or env_cfg.max_episode_length * 0.8< g_state.env_steps):
             #初期生産でかつ水資源に余裕がなければ所属ファクトリー周辺の水資源を探す(生存本能でないから優先度は低い)
             #さらに、最後の方では水やりをするためにたっぷり水を確保してくる
@@ -265,12 +271,11 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 #print(f"{unit.unit_id} is assigned {factory_base.unit_id} found ice at {ice_pos}")
                 action = unit.move(direction_to(unit.pos, ice_pos))
         elif unit.unit_type == "HEAVY" and exist:
-            #場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
             total_light_num = 0
             for unit_ in my_units.values():
                 if unit_.unit_type == "LIGHT":
                     total_light_num += 1
-            if total_light_num < target_light_num:
+            if total_light_num < target_light_num:#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
                 search_center = factory_base.pos
                 adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
                 second_adj_vecs = np.array([[3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
@@ -290,7 +295,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                         if resoure_exist(g_state, search_center + second_adj_vecs[i], 1):
                             ore_pos = search_center+second_adj_vecs[i]
                             break
-                if not (ore_pos is None):
+                if not (ore_pos is None) and rubble_num(g_state, unit.pos) == 0:
                     action = unit.move(direction_to(unit.pos, ore_pos))
 
         if is_on and factory_on.power > 100 and unit.power < unit.unit_cfg.DIG_COST * 3:
@@ -353,7 +358,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if not action == None:
                 actions[factory.unit_id] = action
                 continue
-            embedder = factory_embedder(index)
+            """embedder = factory_embedder(index)
             action_value = 0
             for i in range(token_len):
                 action_value += embedder[i] * tokens[i]
@@ -366,7 +371,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             elif action_value < 3:
                 pass
             else:
-                print("error-tipo")
+                print("error-tipo")"""
 
         for index, unit in enumerate(my_units.values()):
             if(unit.power < unit.action_queue_cost(state)):
@@ -505,7 +510,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
     else:
         actions = dict(faction="AlphaStrike", bid = 0)
 
-    print(f"actions = {actions}")
+    #print(f"actions = {actions}")
     return actions
 
 def env_to_tokens(state:GameState, unit_log, view_agent):#雑に作る。若干の情報のオーバーラップは仕方なし。
@@ -842,7 +847,8 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
                 cause += f"[{agent} down] "
         if state.real_env_steps == game_len:
             finished = True
-            cause += f"[env leached last]"
+            agents = ["player_0", "player_1"]
+            cause += f"[env leached last, value(0vs1): {state_value(state, agents[0])}: {state_value(state, agents[1])}]"
         return finished, cause
     env = LuxAI2022(verbose = 0)
     seed = random.randint(0, 100000)
@@ -1089,7 +1095,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.11.2 restart from epoch {restart_epoch}")
+        print(f"ver1.11.5 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
