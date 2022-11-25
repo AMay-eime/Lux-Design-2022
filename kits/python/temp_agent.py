@@ -55,7 +55,7 @@ import math
 import random
 
 #config
-restart_epoch = 31
+restart_epoch = 51
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -79,6 +79,7 @@ advantage_steps = 10
 #rule basedを制御する変数
 target_light_num = 3
 factory_territory = 2
+least_water_storage = 400
 
 #盤面の評価に使える便利所たち
 def resoure_exist(g_state:GameState, pos:np.ndarray, resource_type):#type = 1(ice) 0(ore)
@@ -227,7 +228,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
 
         if unit.unit_type == "HEAVY":
             #隣に敵のHEAVYがいる場合は突進する(この判定は独自に行う（優先度最低）
-            enemy_team_id = "player_1" if unit.team_id == "player_0" else "player_0"
+            enemy_team_id = "player_1" if unit.team_id == 0 else "player_0"
             enemy_units = g_state.units[enemy_team_id].values()
             target_unit = None
             for enemy_unit in enemy_units:
@@ -238,7 +239,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if not(target_unit is None):
                 print(f"in {g_state.real_env_steps}, {unit.unit_id} charges {target_unit.unit_id}!")
                 action = unit.move(direction_to(unit.pos, target_unit.pos))
-        if unit.unit_type == "HEAVY" and exist and (factory_base.cargo.water < 100 or env_cfg.max_episode_length * 0.8< g_state.env_steps):
+        if unit.unit_type == "HEAVY" and exist and (factory_base.cargo.water < least_water_storage or env_cfg.max_episode_length * 0.8< g_state.env_steps):
             #初期生産でかつ水資源に余裕がなければ所属ファクトリー周辺の水資源を探す(生存本能でないから優先度は低い)
             #さらに、最後の方では水やりをするためにたっぷり水を確保してくる
             search_center = factory_base.pos
@@ -345,7 +346,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
 
     tokens = tokens.squeeze(0)
 
-    actions = dict()
+    actions = {}
     if(state.real_env_steps >= 0):
         for index, factory in enumerate(my_factories.values()):
             action = rulebased_factory(state, factory)
@@ -451,6 +452,14 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 actions[unit.unit_id] = [action]
 
     elif state.env_steps != 0:
+        def check_is_in(target_position:np.ndarray, position_array:np.ndarray):#左右対称がなくなったらイラン
+            is_in = False
+            for i in range(position_array.shape[0]):
+                if all(target_position == position_array[i]) or \
+                    (pos_on_factory(state, pos)[0] and f"player_{pos_on_factory(state, pos)[1].team_id}" == agent):
+                    is_in = True
+                    break
+            return is_in
         pos = np.zeros(2)
         for i in range(2):
             action_value = 0
@@ -459,8 +468,14 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 action_value += embedder[k]*tokens[k]
             grid = math.ceil(action_value * 48 % 48)
             pos[i] = grid
-        #print(f"set pos = {pos}")
         potential_spawns:np.ndarray = state.board.spawns[agent]
+        if not check_is_in(pos, potential_spawns):
+            if check_is_in(np.array([pos[0], env_cfg.map_size - pos[1]]), potential_spawns):
+                pos = np.array([pos[0], env_cfg.map_size - pos[1]])
+            elif check_is_in(np.array([env_cfg.map_size - pos[0], pos[1]]), potential_spawns):
+                pos = np.array([env_cfg.map_size - pos[0], pos[1]])
+            else:
+                print("no good pos")
         water_adjs:np.ndarray = water_adj_pos(state)
         water_potentials = []
         for i in range(water_adjs.shape[0]):
@@ -490,7 +505,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
     else:
         actions = dict(faction="AlphaStrike", bid = 0)
 
-    #print(f"actions = {actions}")
+    print(f"actions = {actions}")
     return actions
 
 def env_to_tokens(state:GameState, unit_log, view_agent):#雑に作る。若干の情報のオーバーラップは仕方なし。
@@ -830,7 +845,7 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
             cause += f"[env leached last]"
         return finished, cause
     env = LuxAI2022(verbose = 0)
-    seed = random.randint(0, 10000)
+    seed = random.randint(0, 100000)
     step = 0
     env_cfg = env.env_cfg
     obs = env.reset(seed = seed)["player_0"]
@@ -1074,7 +1089,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.11.0 restart from epoch {restart_epoch}")
+        print(f"ver1.11.2 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
