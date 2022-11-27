@@ -18,7 +18,7 @@ import random
 orth_adj_list = [np.array([0,1]), np.array([0,-1]), np.array([-1,0]), np.array([1,0])]
 
 #config
-restart_epoch = 91
+restart_epoch = 1
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -53,7 +53,7 @@ def distance(pos1:np.ndarray, pos2:np.ndarray):
     ds = pos2-pos1
     return abs(ds[0]) + abs(ds[1])
 
-def pos_out_map(pos:np.ndarray, mapsize):
+def pos_out_map(pos:np.ndarray, mapsize) -> bool:
     return pos[0] < 0 or mapsize-1 < pos[0] or pos[1] < 0 or mapsize-1 < pos[1]
 
 def resoure_exist(g_state:GameState, pos:np.ndarray, resource_type):#type = 1(ice) 0(ore)
@@ -166,7 +166,7 @@ def get_tactical_points(g_state:GameState, view_agent):
                     if i == 0 and j == 0:
                         continue
                     target_pos = pos + np.array([i,j])
-                    if rubble_num(g_state, target_pos) == 0 and not(target_pos.tobytes() in my_lichen) and not(target_pos.tobytes() in opp_lichen):
+                    if not pos_out_map(target_pos, g_state.env_cfg.map_size) and rubble_num(g_state, target_pos) == 0 and not(target_pos.tobytes() in my_lichen) and not(target_pos.tobytes() in opp_lichen):
                         empty_is = True
                         continue
                     if (target_pos.tobytes() in opp_lichen) and opp_lichen[target_pos.tobytes()] == lichen:
@@ -181,11 +181,13 @@ def get_tactical_points(g_state:GameState, view_agent):
             now_pos = one_less_lichens.copy()
             temp_pos = []
             link_num = 0
-            while link_num < 200 or len(now_pos) > 0:
+            while link_num < 200 and len(now_pos) > 0:
                 for pos_ in now_pos:
                     link_num += g_state.board.lichen[pos_[1]][pos_[0]]
                     for dir in orth_adj_list:
                         target_pos = pos_ + dir
+                        if pos_out_map(target_pos, g_state.env_cfg.map_size):
+                            continue
                         already_is = False
                         for pas_pos_ in past_pos:
                             if all(pas_pos_ == target_pos):
@@ -196,15 +198,16 @@ def get_tactical_points(g_state:GameState, view_agent):
                             past_pos.append(target_pos)
                 now_pos = temp_pos.copy()
                 temp_pos = []
-            if not link_num < 15:
+            if not link_num < 200:
                 destruct_pos.append(pos)
     return dig_pos, destruct_pos
 
-def alt_direction_to(g_state:GameState, src, target):
+def alt_direction_to(g_state:GameState, src, tgt, team_id:int):
     direction_dict = {1:[0,-1], 2:[1, 0], 3:[0,-1], 4:[-1,0]}
-    direction = direction_to(src, target)
-    if pos_on_factory(g_state, src + np.array(direction_dict[direction])):
-        direction = secondery_directiopn_to(src, target)
+    direction = direction_to(src, tgt)
+    is_on, factory = pos_on_factory(g_state, src + np.array(direction_dict[direction]))
+    if is_on and not factory.team_id == team_id:
+        direction = secondery_directiopn_to(src, tgt)
     return direction
 
 #便利な変換する奴らたち
@@ -238,7 +241,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             factories.extend(list(item.values()))
         for factory in factories:
             factory_pos = factory.pos
-            if abs(pos[0]-factory_pos[0]) < 3 + factory_territory*2 and abs(pos[1]-factory_pos[1]) < 3 + factory_territory*2:
+            if distance(pos, factory_pos) < 6 + factory_territory * 2 and\
+                abs(pos[0]-factory_pos[0]) < 4 + factory_territory*2 and abs(pos[1]-factory_pos[1]) < 4 + factory_territory*2:
                 return True
         return False
 
@@ -259,8 +263,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         for factory in factories:
             unit_pos = unit.pos
             factory_pos = factory.pos
-            if distance(unit_pos, factory_pos) < 2 + factory_territory and\
-                abs(unit_pos[0]-factory_pos[0]) < 1 + factory_territory and abs(unit_pos[1]-factory_pos[1]) < 1 + factory_territory:
+            if distance(unit_pos, factory_pos) < 3 + factory_territory and\
+                abs(unit_pos[0]-factory_pos[0]) < 2 + factory_territory and abs(unit_pos[1]-factory_pos[1]) < 2 + factory_territory:
                 return True, factory
         return False, None
 
@@ -314,14 +318,14 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         in_terr, factory_terr = unit_in_factory_territory(g_state, unit)
 
         if unit.unit_type == "LIGHT":#Light robotに割くエネルギーはほぼない。作戦行動用。
-            search_list = np.array([[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[-1,1],[1,-1],[2,0],[-2,0],[0,2],[0,-2]])
+            search_list = np.array([[1,0],[-1,0],[0,1],[0,-1]])
             
             heavy_list = []
             my_light_list = []
             for unit_ in state.units[my_team_id].values():
                 if unit_.unit_type == "HEAVY":
                     heavy_list.append(unit_.pos)
-                if unit_.unit_type == "Light":
+                if unit_.unit_type == "LIGHT":
                     my_light_list.append(unit_.pos)
             for unit_ in state.units[enemy_team_id].values():
                 if unit_.unit_type == "HEAVY":
@@ -330,18 +334,18 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             #作戦行動、destruction優先で。
             dig_pos, destruct_pos = get_tactical_points(g_state, my_team_id)
             destruct_pos.extend(dig_pos)
-            if len(destruct_pos) > 0:
-                print(f"{g_state.real_env_steps} tacticalpos = {destruct_pos}")
+            #if len(destruct_pos) > 0:
+                #print(f"{g_state.real_env_steps} tacticalpos = {destruct_pos}")
             for d_pos in destruct_pos:
                 my_dist = distance(d_pos, unit.pos)
                 nearest = True
                 for l_pos in my_light_list:
-                    if not all(d_pos == l_pos) and distance(d_pos, l_pos) < my_dist:
+                    if distance(d_pos, l_pos) < my_dist:
                         nearest = False
                         break
                 if nearest:
                     if my_dist > 0:
-                        action = unit.move(alt_direction_to(g_state, unit.pos, d_pos))
+                        action = unit.move(alt_direction_to(g_state, unit.pos, d_pos, unit.team_id))
                     else:
                         if rubble_num(g_state, unit.pos):
                             action = unit.dig()
@@ -350,7 +354,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if (action is None):
                 action = unit.move(0)
 
-            #生存本能
+            #生存本能(隣接避け、多少のクラッシュは仕方なし(学習しろ))
             target_pos = None
             for i in range(search_list.shape[0]):
                 pos = unit.pos + search_list[i]
@@ -456,13 +460,13 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 not all(unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos))):
                 action = unit.transfer(direction_factory, 1, unit.cargo.ore, False)
                 #print(f"{unit.unit_id} rb passing ore {unit.cargo.ore}")
-        elif not unit_on_factory(g_state, unit)[0]:
+        elif not unit_on_factory(g_state, unit)[0] and unit.unit_type == "HEAVY":
             if len(unit_log[unit.unit_id][0]) > 1:
                 return_action, cost = log_calc(g_state, unit, unit_log[unit.unit_id][0])
                 if unit.power < cost + unit.unit_cfg.MOVE_COST * 10 + unit.unit_cfg.DIG_COST and unit.power >= unit.unit_cfg.MOVE_COST:
                     action = return_action
                     #print(f"{unit.unit_id} remote return len {len(unit_log[unit.unit_id])-1} where {unit_log[unit.unit_id]}")
-                elif unit.power >= unit.unit_cfg.DIG_COST and (resoure_exist(g_state, unit.pos, 0) or resoure_exist(g_state, unit.pos, 1)) and unit.unit_type == "HEAVY":
+                elif unit.power >= unit.unit_cfg.DIG_COST and (resoure_exist(g_state, unit.pos, 0) or resoure_exist(g_state, unit.pos, 1)):
                     #すごく強くなるようならここを取る。
                     action = unit.dig(True)
                     #print(f"{unit.unit_id} remote dig pow {unit.power}")
@@ -481,7 +485,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         for grid in ice_grids:
             for vec in adj_vecs:
                 target_grid = [grid[0]+vec[0], grid[1]+vec[1]]
-                if not(target_grid in return_grids) and not(pos_overrap_factory(g_state, np.array([i,j]))):
+                if not(target_grid in return_grids) and not(pos_overrap_factory(g_state, np.array(target_grid))):
                     return_grids.append(target_grid)
         return np.array(return_grids)
 
@@ -577,7 +581,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if not (action is None) and not is_the_same_action(action, unit_next_action(unit)):
                 #print("change")
                 actions[unit.unit_id] = [action]
-
     elif state.env_steps != 0:
         def check_is_in(target_position:np.ndarray, position_array:np.ndarray):#左右対称がなくなったらイラン
             is_in = False
@@ -609,7 +612,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             for j in range(potential_spawns.shape[0]):
                 if all(water_adjs[i] == potential_spawns[j]):
                     water_potentials.append(water_adjs[i])
-        print(water_potentials)
+        #print(water_potentials)
         length = 100
         index = 0
         if len(water_potentials) > 0:
@@ -1217,7 +1220,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.12.4 restart from epoch {restart_epoch}")
+        print(f"ver1.13.8 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
