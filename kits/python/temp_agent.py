@@ -16,6 +16,8 @@ import math
 import random
 
 orth_adj_list = [np.array([0,1]), np.array([0,-1]), np.array([-1,0]), np.array([1,0])]
+factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.array([-1,0]), np.array([1,0]),\
+    np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
 restart_epoch = 1
@@ -122,6 +124,37 @@ def get_lichen_dict(g_state:GameState, view_agent):
                 opp_lichen_dict[np.array([i,k]).tobytes()] = lichen_map[k][i]
                 if lichen_map[k][i] == 0:
                     print("error, lichen 0 added dict")
+    return my_lichen_dict, opp_lichen_dict
+
+def get_possible_lichen_dict(g_state:GameState, view_agent):
+    opp_agent = "player_1" if view_agent == "player_0" else "player_0"
+    my_factories = g_state.factories[view_agent]
+    opp_factories = g_state.factories[opp_agent]
+    my_strains = []
+    opp_strains = []
+    my_lichen_dict = {}
+    opp_lichen_dict = {}
+    my_area = []
+    opp_area = []
+    for factory in my_factories.values():
+        my_strains.append(factory.strain_id)
+        for grid in factory_area_list:
+            my_area.append(factory.pos + grid)
+    for factory in opp_factories.values():
+        opp_strains.append(factory.strain_id)
+        for grid in factory_area_list:
+            opp_area.append(factory.pos + grid)
+    my_temp_area = []
+    opp_temp_area = []
+    while len(my_area) > 0 or len(opp_area) > 0:
+        for grid in my_area:
+            for vec in orth_adj_list:
+                target_grid:np.ndarray = grid + vec
+                if pos_out_map(target_grid, g_state.env_cfg.map_size):
+                    continue
+                if rubble_num(g_state, target_grid) and not(target_grid.tobytes() in my_lichen_dict) and  not(target_grid.tobytes() in opp_lichen_dict):
+                    
+
     return my_lichen_dict, opp_lichen_dict
 
 def get_tactical_points(g_state:GameState, view_agent):
