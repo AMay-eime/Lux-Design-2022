@@ -20,7 +20,7 @@ factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.arra
     np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
-restart_epoch = 0
+restart_epoch = 11
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
