@@ -174,11 +174,11 @@ def get_lichen_dict(g_state:GameState, view_agent):
         for k in range(strain_map.shape[1]):
             strain_id = strain_map[k][i]
             if strain_id in my_strains:
-                my_lichen_dict[np.array([i,k]).tobytes()] = lichen_map[k][i]
+                my_lichen_dict[np.array([i,k]).astype(np.int32).tobytes()] = lichen_map[k][i]
                 if lichen_map[k][i] == 0:
                     print("error, lichen 0 added dict")
             if strain_id in opp_strains:
-                opp_lichen_dict[np.array([i,k]).tobytes()] = lichen_map[k][i]
+                opp_lichen_dict[np.array([i,k]).astype(np.int32).tobytes()] = lichen_map[k][i]
                 if lichen_map[k][i] == 0:
                     print("error, lichen 0 added dict")
     return my_lichen_dict, opp_lichen_dict
@@ -199,17 +199,23 @@ def get_pseudo_lichen_dict(g_state:GameState, view_agent):
         my_strains.append(factory.strain_id)
         factory_lichenpos_dict[factory.unit_id] = []
         for grid in factory_area_list:
-            my_area.append((factory.pos + grid).astype(np.int32).tobytes())
-            pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
+            if grid[0] == 0 and grid[1] == 0:
+                my_area.append((factory.pos + grid).astype(np.int32).tobytes())
+                pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
+            elif abs(grid[0]) == 1 and abs(grid[1]) == 1:
+                my_lichen_dict[(factory.pos + grid).astype(np.int32).tobytes()] = -2
     for factory in opp_factories.values():
         opp_strains.append(factory.strain_id)
         factory_lichenpos_dict[factory.unit_id] = []
         for grid in factory_area_list:
-            opp_area.append((factory.pos + grid).astype(np.int32).tobytes())
-            pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
+            if grid[0] == 0 and grid[1] == 0:
+                opp_area.append((factory.pos + grid).astype(np.int32).tobytes())
+                pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
+            elif abs(grid[0]) == 1 and abs(grid[1]) == 1:
+                opp_lichen_dict[(factory.pos + grid).astype(np.int32).tobytes()] = -2
     my_temp_area = []
     opp_temp_area = []
-    pseudo_lichen = 0
+    pseudo_lichen = -1
     while len(my_area) > 0 or len(opp_area) > 0:
         for grid_byte in my_area:
             my_lichen_dict[grid_byte] = pseudo_lichen
@@ -278,7 +284,8 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
     destruct_lichen_dict = {}
     for pos_byte, lichen in opp_lichen.items():
         pos = np.frombuffer(pos_byte, dtype = np.int32)
-        if lichen < 25:#あまり遠すぎても効果薄いし計算時間かかる
+        if 0 < lichen and lichen < 25:#あまり遠すぎても効果薄いし計算時間かかる
+            zero_lichen_check_list = [[2,2],[-2,2],[2,-2],[-2,-2]]
             same_lichen_is = False
             one_more_pseudo_lichens = []
             for i in range(-1, 2):
@@ -317,8 +324,18 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
                 now_pos = temp_pos.copy()
                 temp_pos = []
                 now_pseudo_lichen_num += 1
-            if not link_num < 20:
+            if not link_num < 20 and 1 < lichen:
                 destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
+            elif not link_num < 20 and 1 == lichen:
+                another_escape = False
+                for point_l in zero_lichen_check_list:
+                    point:np.ndarray = np.array(point_l)
+                    target_pos = pos + point
+                    if target_pos.astype(np.int32).tobytes() in opp_lichen and opp_lichen[target_pos.astype(np.int32).tobytes()] == 1:
+                        another_escape = True
+                        break
+                if not another_escape:
+                    destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
     for pos_byte, lichen in destruct_lichen_dict.items():
         better_exists = False
         for pos_byte_ in destruct_lichen_dict:
@@ -369,8 +386,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             factories.extend(list(item.values()))
         for factory in factories:
             factory_pos = factory.pos
-            if distance(pos, factory_pos) < 6 + factory_territory * 2 and\
-                abs(pos[0]-factory_pos[0]) < 4 + factory_territory*2 and abs(pos[1]-factory_pos[1]) < 4 + factory_territory*2:
+            if distance(pos, factory_pos) < 5 + factory_territory * 2 and\
+                abs(pos[0]-factory_pos[0]) < 3 + factory_territory*2 and abs(pos[1]-factory_pos[1]) < 3 + factory_territory*2:
                 return True
         return False
 
@@ -553,7 +570,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     total_light_num += 1
                 if distance(unit_.pos, factory_base.pos) == 0:
                     on_base = True
-            if total_light_num < target_light_num and (not on_base or factory_base.cargo.metal < factory_base.build_light_metal_cost(g_state) * 3):#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
+            if total_light_num < len(tactical_points) and not on_base:#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
                 search_center = factory_base.pos
                 adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
                 second_adj_vecs = np.array([[3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
@@ -786,6 +803,123 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
 
 def env_to_tokens(state:GameState, unit_log, view_agent):#雑に作る。若干の情報のオーバーラップは仕方なし。
     board = state.board
+    env_cfg = state.env_cfg
+    agents = []
+    if view_agent == "player_0":
+        agents = ["player_0", "player_1"]
+    elif view_agent == "player_1":
+        agents = ["player_1", "player_0"]
+    else:
+        print("error tipo")
+    def rubble_lichen_magnitude(amount:int) -> int:
+        if amount == 0:
+            return 0
+        elif 0 < amount and amount <= 100:
+            return 50 + amount/2
+        else:
+            print("rl_magnitude_out of length")
+            return 100
+    #まずはrubble(*2)
+    rubble_map = board.rubble
+    rubble_map_informal = np.zeros((env_cfg.map_size//2, env_cfg.map_size//2))
+    for i in range(env_cfg.map_size//2):
+        for j in range(env_cfg.map_size//2):
+            for k in range(2):
+                for l in range(2):
+                    rubble_map_informal[i][j] = rubble_lichen_magnitude(rubble_map[2*i+k][2*j+l])/400
+    rubble_map_informal = rubble_map_informal.reshape((rubble_map_informal.size // token_len, token_len))
+    tokens = rubble_map_informal
+    #次にresources(*8)
+    ice_map = board.ice
+    ore_map = board.ore
+    resource_map = ice_map + 2 * ore_map
+    resource_map = resource_map.reshape((resource_map.size // token_len, token_len))
+    tokens = np.concatenate((tokens, resource_map))
+    #次にlichen(*2)
+    lichen_map = np.zeros((env_cfg.map_size//2, env_cfg.map_size//2))
+    my_lichen_dict, opp_lichen_dict = get_lichen_dict(state, view_agent)
+    for i in range(env_cfg.map_size//2):
+        for j in range(env_cfg.map_size//2):
+            for k in range(2):
+                for l in range(2):
+                    grid = np.array([2*i+k, 2*j+l]).astype(np.int32)
+                    grid_byte = grid.tobytes()
+                    if grid_byte in my_lichen_dict:
+                        lichen_map[i][j] += rubble_lichen_magnitude(my_lichen_dict[grid_byte])/400
+    lichen_map = lichen_map.reshape((lichen_map.size // token_len, token_len))
+    tokens = np.concatenate((tokens, lichen_map))
+    #次にfactory(場所:2, リソース:5, strain_id:1, player:1)最高でも5個らしい(*1)
+    factory_info = np.zeros((1, token_len))
+    index_pos = 0
+    for agent in agents:
+        for factory in state.factories[agent].values():
+            factory_info[0][index_pos] = factory.pos[0] / 48
+            factory_info[0][index_pos+1] = factory.pos[1] / 48
+            cargo:UnitCargo = factory.cargo
+            factory_info[0][index_pos+2] = factory.power / 1000
+            factory_info[0][index_pos+3] = cargo.ice / 100
+            factory_info[0][index_pos+4] = cargo.ore / 100
+            factory_info[0][index_pos+5] = cargo.water / 100
+            factory_info[0][index_pos+6] = cargo.metal / 100
+            factory_info[0][index_pos+7] = factory.strain_id / 100
+            factory_info[0][index_pos+8] = 0 if agent == view_agent\
+                else 1
+            index_pos += 9
+    tokens = np.concatenate((tokens, factory_info))
+    #次にunit(場所:2, リソース:5, playerと種別:1, 次の行動:1)(*2)
+    unit_info_dim = 9
+    unit_num = 0
+    for agent in state.units:
+        unit_num += len(state.units[agent].values())
+    #unit_infos = np.zeros((unit_num//(token_len//unit_info_dim) + 1, token_len))
+    unit_infos = np.zeros((2, token_len))
+    x_index = 0
+    y_index = 0
+    for agent in agents:
+        for unit in state.units[agent].values():
+            unit_infos[x_index][y_index] = unit.pos[0] / 48
+            unit_infos[x_index][y_index+1] = unit.pos[1] / 48
+            cargo:UnitCargo = unit.cargo
+            unit_infos[x_index][y_index+2] = unit.power / 1000
+            unit_infos[x_index][y_index+3] = cargo.ice / 100
+            unit_infos[x_index][y_index+4] = cargo.ore / 100
+            unit_infos[x_index][y_index+5] = cargo.water / 100
+            unit_infos[x_index][y_index+6] = cargo.metal / 100
+            if agent == view_agent:
+                if unit.unit_type == "LIGHT":
+                    unit_infos[x_index][y_index+7] = 0.5
+                else:
+                    unit_infos[x_index][y_index+7] = 1
+            else:
+                if unit.unit_type == "LIGHT":
+                    unit_infos[x_index][y_index+7] = -0.5
+                else:
+                    unit_infos[x_index][y_index+7] = -1
+            direction_value = unit_log[unit.unit_id][1]/4
+            unit_infos[x_index][y_index+8] = direction_value
+            y_index += unit_info_dim
+            if y_index+unit_info_dim > token_len:
+                y_index = 0
+                if x_index < 1:
+                    x_index += 1
+    tokens = np.concatenate((tokens, unit_infos))
+    #ラスト基本情報(*1)
+    basics = np.zeros((1, token_len))
+    basics[0][0] = state.real_env_steps / state.env_cfg.max_episode_length
+    if state.real_env_steps < 0:
+        pass
+    elif state.env_cfg.max_episode_length - state.real_env_steps > token_len - 1:
+        #print(state.weather_schedule[state.real_env_steps:state.real_env_steps+token_len-1])
+        basics[0][1:] = state.weather_schedule[state.real_env_steps:state.real_env_steps+token_len-1]
+    elif state.real_env_steps < state.env_cfg.max_episode_length:
+        #print(state.weather_schedule[state.real_env_steps:])
+        basics[0][1:1+state.env_cfg.max_episode_length - state.real_env_steps] = state.weather_schedule[state.real_env_steps:]
+    tokens = np.concatenate((tokens, basics))
+    
+    #print(tokens.shape)
+    return tokens
+
+    board = state.board
     agents = []
     if view_agent == "player_0":
         agents = ["player_0", "player_1"]
@@ -879,16 +1013,6 @@ def env_to_tokens(state:GameState, unit_log, view_agent):#雑に作る。若干�
     tokens = np.concatenate((tokens, basics))
     
     return tokens
-
-def unit_on_factory(g_state:GameState, unit:Unit):
-    team_name = f"player_{unit.team_id}"
-    factories = g_state.factories[team_name].values()
-    for factory in factories:
-        unit_pos = unit.pos
-        factory_pos = factory.pos
-        if abs(unit_pos[0]-factory_pos[0]) < 2 and abs(unit_pos[1]-factory_pos[1]) < 2:
-            return True, factory
-    return False, None
 
 #近傍アクション生成機
 def action_nearby_token(token:np.ndarray, variance):

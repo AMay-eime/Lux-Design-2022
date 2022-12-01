@@ -20,7 +20,7 @@ factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.arra
     np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
-restart_epoch = 0
+restart_epoch = 11
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -230,7 +230,8 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
     destruct_lichen_dict = {}
     for pos_byte, lichen in opp_lichen.items():
         pos = np.frombuffer(pos_byte, dtype = np.int32)
-        if 1 < lichen and lichen < 25:#あまり遠すぎても効果薄いし計算時間かかる
+        if 0 < lichen and lichen < 25:#あまり遠すぎても効果薄いし計算時間かかる
+            zero_lichen_check_list = [[2,2],[-2,2],[2,-2],[-2,-2]]
             same_lichen_is = False
             one_more_pseudo_lichens = []
             for i in range(-1, 2):
@@ -269,8 +270,18 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
                 now_pos = temp_pos.copy()
                 temp_pos = []
                 now_pseudo_lichen_num += 1
-            if not link_num < 20:
+            if not link_num < 20 and 1 < lichen:
                 destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
+            elif not link_num < 20 and 1 == lichen:
+                another_escape = False
+                for point_l in zero_lichen_check_list:
+                    point:np.ndarray = np.array(point_l)
+                    target_pos = pos + point
+                    if target_pos.astype(np.int32).tobytes() in opp_lichen and opp_lichen[target_pos.astype(np.int32).tobytes()] == 1:
+                        another_escape = True
+                        break
+                if not another_escape:
+                    destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
     for pos_byte, lichen in destruct_lichen_dict.items():
         better_exists = False
         for pos_byte_ in destruct_lichen_dict:
@@ -321,8 +332,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             factories.extend(list(item.values()))
         for factory in factories:
             factory_pos = factory.pos
-            if distance(pos, factory_pos) < 6 + factory_territory * 2 and\
-                abs(pos[0]-factory_pos[0]) < 4 + factory_territory*2 and abs(pos[1]-factory_pos[1]) < 4 + factory_territory*2:
+            if distance(pos, factory_pos) < 5 + factory_territory * 2 and\
+                abs(pos[0]-factory_pos[0]) < 3 + factory_territory*2 and abs(pos[1]-factory_pos[1]) < 3 + factory_territory*2:
                 return True
         return False
 
@@ -505,7 +516,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     total_light_num += 1
                 if distance(unit_.pos, factory_base.pos) == 0:
                     on_base = True
-            if total_light_num < target_light_num and (not on_base or factory_base.cargo.metal < factory_base.build_light_metal_cost(g_state) * 3):#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
+            if total_light_num < len(tactical_points) and not on_base:#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
                 search_center = factory_base.pos
                 adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
                 second_adj_vecs = np.array([[3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
@@ -585,7 +596,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
     if(state.real_env_steps >= 0):
         #必要要素の計算
         my_lichen, opp_lichen, factory_pos_dict = get_pseudo_lichen_dict(state, agent)
-        print(f"{agent} {len(my_lichen)} {len(opp_lichen)}")
         dig_pos, destruct_pos = get_tactical_points(state, my_lichen, opp_lichen)
         total_tactical_pos = destruct_pos
         total_tactical_pos.extend(dig_pos)
@@ -852,7 +862,7 @@ def env_to_tokens(state:GameState, unit_log, view_agent):#雑に作る。若干�
         basics[0][1:1+state.env_cfg.max_episode_length - state.real_env_steps] = state.weather_schedule[state.real_env_steps:]
     tokens = np.concatenate((tokens, basics))
     
-    print(tokens.shape)
+    #print(tokens.shape)
     return tokens
 
 #近傍アクション生成機
@@ -1339,7 +1349,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.14.0 restart from epoch {restart_epoch}")
+        print(f"ver1.14.1 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
