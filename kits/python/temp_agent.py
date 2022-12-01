@@ -1,5 +1,5 @@
 from lux.kit import obs_to_game_state, GameState, EnvConfig, Team, Factory, Unit, UnitCargo
-from lux.utils import direction_to, is_the_same_action, secondery_directiopn_to
+from lux.utils import direction_to, is_the_same_action, secondery_directiopn_to, move_effective_direction_to, secondary_move_effective_direction_to
 import numpy as np
 import sys
 from typing import Dict
@@ -20,7 +20,7 @@ factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.arra
     np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
-restart_epoch = 11
+restart_epoch = 21
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -252,7 +252,7 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
             temp_pos = []
             link_num = 0
             now_pseudo_lichen_num = lichen + 2
-            while link_num < 20 and len(now_pos) > 0:
+            while link_num < 10 and len(now_pos) > 0:
                 for pos_ in now_pos:
                     link_num += 1
                     for dir in orth_adj_list:
@@ -270,9 +270,9 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
                 now_pos = temp_pos.copy()
                 temp_pos = []
                 now_pseudo_lichen_num += 1
-            if not link_num < 20 and 1 < lichen:
+            if not link_num < 10 and 1 < lichen:
                 destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
-            elif not link_num < 20 and 1 == lichen:
+            elif not link_num < 10 and 1 == lichen:
                 another_escape = False
                 for point_l in zero_lichen_check_list:
                     point:np.ndarray = np.array(point_l)
@@ -293,12 +293,12 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
             destruct_pos.append(np.frombuffer(pos_byte, dtype=np.int32))
     return dig_pos, destruct_pos
 
-def alt_direction_to(g_state:GameState, src, tgt, team_id:int):
+def path_finding_direction_to(g_state:GameState, src, tgt, team_id:int, initial_direction:int = 0):
     direction_dict = {0:[0,0], 1:[0,-1], 2:[1, 0], 3:[0,1], 4:[-1,0]}
-    direction = direction_to(src, tgt)
+    direction = move_effective_direction_to(src, tgt)
     is_on, factory = pos_on_factory(g_state, src + np.array(direction_dict[direction]))
     if is_on and not factory.team_id == team_id:
-        direction = secondery_directiopn_to(src, tgt)
+        direction = secondary_move_effective_direction_to(src, tgt)
     return direction
 
 #便利な変換する奴らたち
@@ -439,7 +439,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                         break
                 if nearest:
                     if my_dist > 0:
-                        action = unit.move(alt_direction_to(g_state, unit.pos, d_pos, unit.team_id))
+                        action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id))
                         continue
                     else:
                         if rubble_num(g_state, unit.pos) > 0:

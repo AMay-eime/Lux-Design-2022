@@ -1,6 +1,6 @@
 #こっちは提出の時に参照される方
 from lux.kit import obs_to_game_state, GameState, EnvConfig
-from lux.utils import direction_to, is_the_same_action, secondery_directiopn_to
+from lux.utils import direction_to, is_the_same_action, secondery_directiopn_to, move_effective_direction_to, secondary_move_effective_direction_to
 import numpy as np
 import sys
 import torch
@@ -349,10 +349,10 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
 
 def alt_direction_to(g_state:GameState, src, tgt, team_id:int):
     direction_dict = {0:[0,0], 1:[0,-1], 2:[1, 0], 3:[0,1], 4:[-1,0]}
-    direction = direction_to(src, tgt)
+    direction = move_effective_direction_to(src, tgt)
     is_on, factory = pos_on_factory(g_state, src + np.array(direction_dict[direction]))
     if is_on and not factory.team_id == team_id:
-        direction = secondery_directiopn_to(src, tgt)
+        direction = secondary_move_effective_direction_to(src, tgt)
     return direction
 
 #便利な変換する奴らたち
