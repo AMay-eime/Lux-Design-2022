@@ -20,7 +20,7 @@ factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.arra
     np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
-restart_epoch = 21
+restart_epoch = 0
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -273,14 +273,16 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
             if not link_num < 10 and 1 < lichen:
                 destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
             elif not link_num < 10 and 1 == lichen:
-                another_escape = False
-                for point_l in zero_lichen_check_list:
-                    point:np.ndarray = np.array(point_l)
-                    target_pos = pos + point
-                    if target_pos.astype(np.int32).tobytes() in opp_lichen and opp_lichen[target_pos.astype(np.int32).tobytes()] == 1:
-                        another_escape = True
-                        break
-                if not another_escape:
+                search_list = [np.array([0,2]), np.array([0,-2]), np.array([2,0]), np.array([-2,0])]
+                factory_pos = np.array([-1,-1])
+                for vec in search_list:
+                    possible_pos = pos + vec
+                    if possible_pos.astype(np.int32).tobytes() in opp_lichen and opp_lichen[possible_pos.astype(np.int32).tobytes()] == -1:
+                        factory_pos = possible_pos
+                if distance(factory_pos, np.array([-1,-1])) == 0:
+                    print("error, no_factorypos from out")
+                direction = direction_to(factory_pos, pos)
+                if not factory_output_linkage(g_state, factory_pos, direction):
                     destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
     for pos_byte, lichen in destruct_lichen_dict.items():
         better_exists = False
@@ -293,14 +295,111 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
             destruct_pos.append(np.frombuffer(pos_byte, dtype=np.int32))
     return dig_pos, destruct_pos
 
-def path_finding_direction_to(g_state:GameState, src, tgt, team_id:int, initial_direction:int = 0):
+def path_finding_direction_to(g_state:GameState, src:np.ndarray, tgt:np.ndarray, team_id:int, initial_direction:int = 0):
+    board:np.ndarray = np.zeros((g_state.env_cfg.map_size, g_state.env_cfg.map_size))
+    opp_factories = g_state.factories[f"player_{1-team_id}"]
+    my_units = g_state.units[f"player_{team_id}"]
+    for _, factory in opp_factories.items():
+        f_pos = factory.pos
+        for vec in factory_area_list:
+            grid = f_pos + np.array(vec)
+            board[grid[0]][grid[1]] = 1
+    for _, unit in my_units.items():
+        board[unit.pos[0]][unit.pos[1]] = 1
+    dist = 0
+    distance_pos_dict = {dist:[(tgt, 0)]}
+    already_searched_list = [tgt.astype(np.int32).tobytes()]
     direction_dict = {0:[0,0], 1:[0,-1], 2:[1, 0], 3:[0,1], 4:[-1,0]}
-    direction = move_effective_direction_to(src, tgt)
-    is_on, factory = pos_on_factory(g_state, src + np.array(direction_dict[direction]))
-    if is_on and not factory.team_id == team_id:
-        direction = secondary_move_effective_direction_to(src, tgt)
+    direction = 0
+    def check_reached_src(pos:np.ndarray, last_direction):
+        if distance(pos, src) == 0:
+            return True
+        if not initial_direction == 0 and abs(initial_direction - last_direction) == 2 and distance(pos+np.array(direction_dict[last_direction]), src) == 0:
+            return True
+        return False
+    while dist in distance_pos_dict and len(distance_pos_dict[dist]) > 0 and direction == 0:
+        for grid, dir_ in distance_pos_dict[dist]:
+            if dir_ == 0:
+                for move_num, vec in direction_dict.items():
+                    check_grid = grid + np.array(vec)
+                    if pos_out_map(check_grid, g_state.env_cfg.map_size) or check_grid.astype(np.int32).tobytes() in already_searched_list\
+                        or board[check_grid[0]][check_grid[1]] == 1:
+                        continue
+                    if check_reached_src(check_grid, move_num):
+                        direction = (move_num + 1)%4 + 1
+                        break
+                    already_searched_list.append(check_grid.astype(np.int32).tobytes())
+                    if dist+1 in distance_pos_dict:
+                        distance_pos_dict[dist+1].append((check_grid, move_num))
+                    else:
+                        distance_pos_dict[dist+1] = [(check_grid, move_num)]
+            else:
+                move_num = dir_
+                vec = direction_dict[move_num]
+                check_grid = grid + np.array(vec)
+                if not pos_out_map(check_grid, g_state.env_cfg.map_size) and not check_grid.astype(np.int32).tobytes() in already_searched_list\
+                    and board[check_grid[0]][check_grid[1]] == 0:
+                    if check_reached_src(check_grid, move_num):
+                        direction = (move_num + 1)%4 + 1
+                        break
+                    already_searched_list.append(check_grid.astype(np.int32).tobytes())
+                    if dist+1 in distance_pos_dict:
+                        distance_pos_dict[dist+1].append((check_grid, move_num))
+                    else:
+                        distance_pos_dict[dist+1] = [(check_grid, move_num)]
+        if dist > 0:
+            for grid, dir_ in distance_pos_dict[dist-1]:
+                for move_num, vec in direction_dict.items():
+                    check_grid = grid + np.array(vec)
+                    if pos_out_map(check_grid, g_state.env_cfg.map_size) or check_grid.astype(np.int32).tobytes() in already_searched_list\
+                    or board[check_grid[0]][check_grid[1]] == 1:
+                        continue
+                    if check_reached_src(check_grid, move_num):
+                        direction = (move_num + 1)%4 + 1
+                        break
+                    already_searched_list.append(check_grid.astype(np.int32).tobytes())
+                    if dist+1 in distance_pos_dict:
+                        distance_pos_dict[dist+1].append((check_grid, move_num))
+                    else:
+                        distance_pos_dict[dist+1] = [(check_grid, move_num)]
+        dist += 1
+    if direction == 0:
+        print(f"path_finding from {src} to {tgt} is null.")
     return direction
 
+def factory_output_linkage(g_state:GameState, factory_pos:np.ndarray, direction:int):
+    direction_dict = {0:[0,0], 1:[0,-1], 2:[1, 0], 3:[0,1], 4:[-1,0]}
+    out_pos = factory_pos + np.array(direction_dict[direction]) * 2
+    linkage_pos = []
+    for i in range(1,5):
+        if not i == direction:
+            pos_ = factory_pos + np.array(direction_dict[i]) * 2
+            linkage_pos.append(pos_.astype(np.int32).tobytes())
+    post_pos = []
+    now_pos = []
+    temp_pos = []
+    linked = False
+    search_distance = 0
+    for vec in factory_area_list:
+        post_pos.append((factory_pos + vec).astype(np.int32).tobytes())
+    post_pos.append(out_pos.astype(np.int32).tobytes())
+    now_pos.append(out_pos)
+    while not linked and len(now_pos) > 0 and search_distance < 30:
+        search_distance += 1
+        for pos_ in now_pos:
+            for vec in orth_adj_list:
+                target_pos:np.ndarray = pos_ + vec
+                if pos_out_map(target_pos, g_state.env_cfg.map_size) or target_pos.astype(np.int32).tobytes() in post_pos:
+                    continue
+                if target_pos.astype(np.int32).tobytes() in linkage_pos:
+                    linked = True
+                    break
+                if rubble_num(g_state, target_pos) == 0:
+                    temp_pos.append(target_pos)
+                    post_pos.append(target_pos.astype(np.int32).tobytes())
+        now_pos = temp_pos.copy()
+        temp_pos = []
+    return linked
 #便利な変換する奴らたち
 def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
     my_factories = state.factories[agent]
@@ -954,10 +1053,10 @@ def action_value(state:GameState, action:Dict[str, np.ndarray], view_agent):
             pos = unit.pos
             ice_map = state.board.ice
             ore_map = state.board.ore
-            if ice_map[pos[1]][pos[0]] > 0:
+            if resoure_exist(state, pos, 0):
                 value += 0.01
                 #print("digging ice")
-            elif ore_map[pos[1]][pos[0]] > 0:
+            elif resoure_exist(state, pos, 1):
                 value += 0.005
                 #print("digging ore")
 
@@ -1104,7 +1203,7 @@ def Play(v_net: ValueNet, a_net: ActionNet, d_net:CustomNet, s_net:CustomNet, be
             agents = ["player_0", "player_1"]
             cause += f"[env leached last, value(0vs1): {state_value(state, agents[0])}: {state_value(state, agents[1])}]"
         return finished, cause
-    env = LuxAI2022(verbose = 0)
+    env = LuxAI2022(verbose = 1)
     seed = random.randint(0, 100000)
     step = 0
     env_cfg = env.env_cfg
