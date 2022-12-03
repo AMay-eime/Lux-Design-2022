@@ -462,7 +462,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     overrap = True
                     break
             if not overrap:
-                print(f"{g_state.real_env_steps} rb light")
+                #print(f"{g_state.real_env_steps} rb light")
                 action = factory.build_light()
         return action
 
