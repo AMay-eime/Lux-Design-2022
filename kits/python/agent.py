@@ -1,6 +1,6 @@
 #こっちは提出の時に参照される方
 from lux.kit import obs_to_game_state, GameState, EnvConfig
-from lux.utils import direction_to, is_the_same_action, secondery_directiopn_to, move_effective_direction_to, secondary_move_effective_direction_to
+from lux.utils import direction_to, is_the_same_action, secondery_directiopn_to, move_effective_direction_to, secondary_move_effective_direction_to, my_turn_to_place_factory
 import numpy as np
 import sys
 import torch
