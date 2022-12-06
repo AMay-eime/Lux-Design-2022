@@ -113,8 +113,8 @@ def pos_out_map(pos:np.ndarray, mapsize) -> bool:
     return pos[0] < 0 or mapsize-1 < pos[0] or pos[1] < 0 or mapsize-1 < pos[1]
 
 def resoure_exist(g_state:GameState, pos:np.ndarray, resource_type):#type = 1(ice) 0(ore)
-        ice_existance = g_state.board.ice[pos[1]][pos[0]]
-        ore_existance = g_state.board.ore[pos[1]][pos[0]]
+        ice_existance = g_state.board.ice[pos[0]][pos[1]]
+        ore_existance = g_state.board.ore[pos[0]][pos[1]]
         if resource_type == 0:
             return ice_existance == 1
         elif resource_type == 1:
@@ -123,10 +123,10 @@ def resoure_exist(g_state:GameState, pos:np.ndarray, resource_type):#type = 1(ic
             print("resouce what")
 
 def rubble_num(g_state:GameState, pos:np.ndarray):
-    return g_state.board.rubble[pos[1]][pos[0]]
+    return g_state.board.rubble[pos[0]][pos[1]]
 
 def lichen_num(g_state:GameState, pos:np.ndarray):
-    return g_state.board.lichen[pos[1]][pos[0]]
+    return g_state.board.lichen[pos[0]][pos[1]]
 
 def factory_adj_grids(factory:Factory, env_cfg:EnvConfig):
     direction_list = [[0,2], [1,2], [-1,2], [2,0], [2,-1], [2,1], [-2,1], [-2,0], [-2,-1], [0,-2], [1,-2], [-1,-2]]
@@ -172,14 +172,14 @@ def get_lichen_dict(g_state:GameState, view_agent):
     strain_map = g_state.board.lichen_strains
     for i in range(strain_map.shape[0]):
         for k in range(strain_map.shape[1]):
-            strain_id = strain_map[k][i]
+            strain_id = strain_map[i][k]
             if strain_id in my_strains:
-                my_lichen_dict[np.array([i,k]).astype(np.int32).tobytes()] = lichen_map[k][i]
-                if lichen_map[k][i] == 0:
+                my_lichen_dict[np.array([i,k]).astype(np.int32).tobytes()] = lichen_map[i][k]
+                if lichen_map[i][k] == 0:
                     print("error, lichen 0 added dict")
             if strain_id in opp_strains:
-                opp_lichen_dict[np.array([i,k]).astype(np.int32).tobytes()] = lichen_map[k][i]
-                if lichen_map[k][i] == 0:
+                opp_lichen_dict[np.array([i,k]).astype(np.int32).tobytes()] = lichen_map[i][k]
+                if lichen_map[i][k] == 0:
                     print("error, lichen 0 added dict")
     return my_lichen_dict, opp_lichen_dict
 
@@ -199,20 +199,14 @@ def get_pseudo_lichen_dict(g_state:GameState, view_agent):
         my_strains.append(factory.strain_id)
         factory_lichenpos_dict[factory.unit_id] = []
         for grid in factory_area_list:
-            if grid[0] == 0 and grid[1] == 0:
-                my_area.append((factory.pos + grid).astype(np.int32).tobytes())
-                pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
-            elif abs(grid[0]) == 1 and abs(grid[1]) == 1:
-                my_lichen_dict[(factory.pos + grid).astype(np.int32).tobytes()] = -2
+            my_area.append((factory.pos + grid).astype(np.int32).tobytes())
+            pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
     for factory in opp_factories.values():
         opp_strains.append(factory.strain_id)
         factory_lichenpos_dict[factory.unit_id] = []
         for grid in factory_area_list:
-            if grid[0] == 0 and grid[1] == 0:
-                opp_area.append((factory.pos + grid).astype(np.int32).tobytes())
-                pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
-            elif abs(grid[0]) == 1 and abs(grid[1]) == 1:
-                opp_lichen_dict[(factory.pos + grid).astype(np.int32).tobytes()] = -2
+            opp_area.append((factory.pos + grid).astype(np.int32).tobytes())
+            pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
     my_temp_area = []
     opp_temp_area = []
     pseudo_lichen = -1
@@ -224,9 +218,9 @@ def get_pseudo_lichen_dict(g_state:GameState, view_agent):
         for grid_byte in my_area:
             for vec in orth_adj_list:
                 target_grid:np.ndarray = np.frombuffer(grid_byte, dtype = np.int32) + vec
-                if pos_out_map(target_grid, g_state.env_cfg.map_size):
+                if pos_out_map(target_grid, g_state.env_cfg.map_size) or rubble_num(g_state, target_grid) > 0 or resoure_exist(g_state, target_grid, 0) or resoure_exist(g_state, target_grid, 1):
                     continue
-                if rubble_num(g_state, target_grid) == 0 and not(target_grid.astype(np.int32).tobytes() in my_lichen_dict) and  not(target_grid.astype(np.int32).tobytes() in opp_lichen_dict) and\
+                if not(target_grid.astype(np.int32).tobytes() in my_lichen_dict) and not(target_grid.astype(np.int32).tobytes() in opp_lichen_dict) and\
                     not(target_grid.astype(np.int32).tobytes() in my_temp_area) and not(target_grid.astype(np.int32).tobytes() in opp_temp_area):
                     my_temp_area.append(target_grid.astype(np.int32).tobytes())
                     factory_lichenpos_dict[pos_to_factory_dict[grid_byte]].append(target_grid)
@@ -234,9 +228,9 @@ def get_pseudo_lichen_dict(g_state:GameState, view_agent):
         for grid_byte in opp_area:
             for vec in orth_adj_list:
                 target_grid:np.ndarray = np.frombuffer(grid_byte, dtype = np.int32) + vec
-                if pos_out_map(target_grid, g_state.env_cfg.map_size):
+                if pos_out_map(target_grid, g_state.env_cfg.map_size) or rubble_num(g_state, target_grid) > 0 or resoure_exist(g_state, target_grid, 0) or resoure_exist(g_state, target_grid, 1):
                     continue
-                if rubble_num(g_state, target_grid) == 0 and not(target_grid.astype(np.int32).tobytes() in my_lichen_dict) and  not(target_grid.astype(np.int32).tobytes() in opp_lichen_dict) and\
+                if not(target_grid.astype(np.int32).tobytes() in my_lichen_dict) and not(target_grid.astype(np.int32).tobytes() in opp_lichen_dict) and\
                     not(target_grid.astype(np.int32).tobytes() in my_temp_area) and not(target_grid.astype(np.int32).tobytes() in opp_temp_area):
                     opp_temp_area.append(target_grid.astype(np.int32).tobytes())
                     factory_lichenpos_dict[pos_to_factory_dict[grid_byte]].append(target_grid)
@@ -253,7 +247,7 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
     dig_pos = []
     for pos_byte, lichen in my_lichen.items():
         pos:np.ndarray = np.frombuffer(pos_byte, dtype = np.int32)
-        if lichen < 20:
+        if lichen < 50:
             #自分の植物の周りで、上下左右を走査。rubble一個挟んで空地ならrubble地をtacticalpointとする。
             #その際、自分の周囲に敵の土地があったらダメです。
             opp_lichen_is = False
@@ -306,7 +300,7 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
             temp_pos = []
             link_num = 0
             now_pseudo_lichen_num = lichen + 2
-            while link_num < 20 and len(now_pos) > 0:
+            while link_num < 10 and len(now_pos) > 0:
                 for pos_ in now_pos:
                     link_num += 1
                     for dir in orth_adj_list:
@@ -324,18 +318,8 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
                 now_pos = temp_pos.copy()
                 temp_pos = []
                 now_pseudo_lichen_num += 1
-            if not link_num < 20 and 1 < lichen:
+            if not link_num < 10:
                 destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
-            elif not link_num < 20 and 1 == lichen:
-                another_escape = False
-                for point_l in zero_lichen_check_list:
-                    point:np.ndarray = np.array(point_l)
-                    target_pos = pos + point
-                    if target_pos.astype(np.int32).tobytes() in opp_lichen and opp_lichen[target_pos.astype(np.int32).tobytes()] == 1:
-                        another_escape = True
-                        break
-                if not another_escape:
-                    destruct_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
     for pos_byte, lichen in destruct_lichen_dict.items():
         better_exists = False
         for pos_byte_ in destruct_lichen_dict:
@@ -347,13 +331,110 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
             destruct_pos.append(np.frombuffer(pos_byte, dtype=np.int32))
     return dig_pos, destruct_pos
 
-def alt_direction_to(g_state:GameState, src, tgt, team_id:int):
+def path_finding_direction_to(g_state:GameState, src:np.ndarray, tgt:np.ndarray, team_id:int, initial_direction:int = 0):
+    board:np.ndarray = np.zeros((g_state.env_cfg.map_size, g_state.env_cfg.map_size))
+    opp_factories = g_state.factories[f"player_{1-team_id}"]
+    my_units = g_state.units[f"player_{team_id}"]
+    for _, factory in opp_factories.items():
+        f_pos = factory.pos
+        for vec in factory_area_list:
+            grid = f_pos + np.array(vec)
+            board[grid[0]][grid[1]] = 1
+    for _, unit in my_units.items():
+        if distance(src, unit.pos) > 0:
+            board[unit.pos[0]][unit.pos[1]] = 1
+    dist = 0
+    distance_pos_dict = {dist:[(tgt, 0)]}
+    already_searched_list = [tgt.astype(np.int32).tobytes()]
     direction_dict = {0:[0,0], 1:[0,-1], 2:[1, 0], 3:[0,1], 4:[-1,0]}
-    direction = move_effective_direction_to(src, tgt)
-    is_on, factory = pos_on_factory(g_state, src + np.array(direction_dict[direction]))
-    if is_on and not factory.team_id == team_id:
-        direction = secondary_move_effective_direction_to(src, tgt)
+    direction = 0
+    def check_reached_src(pos:np.ndarray, last_direction):
+        if distance(pos, src) == 0:
+            return True
+        if not initial_direction == 0 and abs(initial_direction - last_direction) == 2 and distance(pos+np.array(direction_dict[last_direction]), src) == 0:
+            return True
+        return False
+    while dist in distance_pos_dict and len(distance_pos_dict[dist]) > 0 and direction == 0:
+        for grid, dir_ in distance_pos_dict[dist]:
+            if dir_ == 0:
+                for move_num, vec in direction_dict.items():
+                    check_grid:np.ndarray = grid + np.array(vec)
+                    if pos_out_map(check_grid, g_state.env_cfg.map_size) or check_grid.astype(np.int32).tobytes() in already_searched_list\
+                        or board[check_grid[0]][check_grid[1]] == 1:
+                        continue
+                    if check_reached_src(check_grid, move_num):
+                        direction = (move_num + 1)%4 + 1
+                        break
+                    already_searched_list.append(check_grid.astype(np.int32).tobytes())
+                    if dist+1 in distance_pos_dict:
+                        distance_pos_dict[dist+1].append((check_grid, move_num))
+                    else:
+                        distance_pos_dict[dist+1] = [(check_grid, move_num)]
+            else:
+                move_num = dir_
+                vec = direction_dict[move_num]
+                check_grid = grid + np.array(vec)
+                if not pos_out_map(check_grid, g_state.env_cfg.map_size) and not check_grid.astype(np.int32).tobytes() in already_searched_list\
+                    and board[check_grid[0]][check_grid[1]] == 0:
+                    if check_reached_src(check_grid, move_num):
+                        direction = (move_num + 1)%4 + 1
+                        break
+                    already_searched_list.append(check_grid.astype(np.int32).tobytes())
+                    if dist+1 in distance_pos_dict:
+                        distance_pos_dict[dist+1].append((check_grid, move_num))
+                    else:
+                        distance_pos_dict[dist+1] = [(check_grid, move_num)]
+        if dist > 0:
+            for grid, dir_ in distance_pos_dict[dist-1]:
+                for move_num, vec in direction_dict.items():
+                    check_grid = grid + np.array(vec)
+                    if pos_out_map(check_grid, g_state.env_cfg.map_size) or check_grid.astype(np.int32).tobytes() in already_searched_list\
+                    or board[check_grid[0]][check_grid[1]] == 1:
+                        continue
+                    if check_reached_src(check_grid, move_num):
+                        direction = (move_num + 1)%4 + 1
+                        break
+                    already_searched_list.append(check_grid.astype(np.int32).tobytes())
+                    if dist+1 in distance_pos_dict:
+                        distance_pos_dict[dist+1].append((check_grid, move_num))
+                    else:
+                        distance_pos_dict[dist+1] = [(check_grid, move_num)]
+        dist += 1
     return direction
+
+def factory_output_linkage(g_state:GameState, factory_pos:np.ndarray, direction:int):
+    direction_dict = {0:[0,0], 1:[0,-1], 2:[1, 0], 3:[0,1], 4:[-1,0]}
+    out_pos = factory_pos + np.array(direction_dict[direction]) * 2
+    linkage_pos = []
+    for i in range(1,5):
+        if not i == direction:
+            pos_ = factory_pos + np.array(direction_dict[i]) * 2
+            linkage_pos.append(pos_.astype(np.int32).tobytes())
+    post_pos = []
+    now_pos = []
+    temp_pos = []
+    linked = False
+    search_distance = 0
+    for vec in factory_area_list:
+        post_pos.append((factory_pos + vec).astype(np.int32).tobytes())
+    post_pos.append(out_pos.astype(np.int32).tobytes())
+    now_pos.append(out_pos)
+    while not linked and len(now_pos) > 0 and search_distance < 30:
+        search_distance += 1
+        for pos_ in now_pos:
+            for vec in orth_adj_list:
+                target_pos:np.ndarray = pos_ + vec
+                if pos_out_map(target_pos, g_state.env_cfg.map_size) or target_pos.astype(np.int32).tobytes() in post_pos:
+                    continue
+                if target_pos.astype(np.int32).tobytes() in linkage_pos:
+                    linked = True
+                    break
+                if rubble_num(g_state, target_pos) == 0:
+                    temp_pos.append(target_pos)
+                    post_pos.append(target_pos.astype(np.int32).tobytes())
+        now_pos = temp_pos.copy()
+        temp_pos = []
+    return linked
 
 #便利な変換する奴らたち
 def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
@@ -426,16 +507,17 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             #print("rb watering")
             action = factory.water()
         elif factory.cargo.metal >= factory.build_heavy_metal_cost(state) and factory.power >= factory.build_heavy_power_cost(state)\
-            and g_state.env_steps < env_cfg.max_episode_length/5:
+            and g_state.env_steps < env_cfg.max_episode_length/2:
             action = factory.build_heavy()
         elif factory.cargo.metal >= factory.build_light_metal_cost(state) and factory.power >= factory.build_light_power_cost(state)\
-            and g_state.env_steps > env_cfg.max_episode_length/5:
+            and g_state.real_env_steps > env_cfg.max_episode_length/10:
             overrap = False
             for unit_ in my_units.values():
                 if distance(unit_.pos, factory.pos) == 0:
                     overrap = True
                     break
             if not overrap:
+                #print(f"{g_state.real_env_steps} rb light")
                 action = factory.build_light()
         return action
 
@@ -446,10 +528,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         direction = direction_to(log[0], log[1])
         return_cost = 0
         return_cost += (len(log)-1) * unit_cfg.MOVE_COST
-        rubble_map = g_state.board.rubble
         for i in range(1, len(log) - 1):
             pos = log[i]
-            return_cost += rubble_map[pos[1]][pos[0]] * unit_cfg.RUBBLE_MOVEMENT_COST
+            return_cost += rubble_num(g_state, pos) * unit_cfg.RUBBLE_MOVEMENT_COST
         
         return unit.move(direction), return_cost
 
@@ -477,8 +558,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     heavy_list.append(unit_.pos)
 
             #作戦行動、destruction優先で、残っているポイントのうち一番近いところへ行く
-            #if len(destruct_pos) > 0:
-                #print(f"{g_state.real_env_steps} tacticalpos = {destruct_pos}")
+            #if len(tactical_points) > 0:
+            #    print(f"{g_state.real_env_steps} tacticalpos = {tactical_points}")
             for d_pos in tactical_points:
                 my_dist = distance(d_pos, unit.pos)
                 nearest = True
@@ -493,7 +574,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                         break
                 if nearest:
                     if my_dist > 0:
-                        action = unit.move(alt_direction_to(g_state, unit.pos, d_pos, unit.team_id))
+                        action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id))
                         continue
                     else:
                         if rubble_num(g_state, unit.pos) > 0:
@@ -604,8 +685,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             elif unit.power >= unit.dig_cost(g_state) + unit.move_cost(g_state, direction_factory):
                 pos = unit.pos
                 if resoure_exist(g_state, pos, 0) or resoure_exist(g_state, pos, 1) and unit.unit_type == "HEAVY":
-                    #print(f"{unit.unit_id} rb dig rubble = {g_state.board.rubble[pos[1]][pos[0]]} pos = {pos}, ice = {unit.cargo.ice}, ore = {unit.cargo.ore}")
-                    #print(f"ice = {g_state.board.ice[pos[1]][pos[0]]}, ore = {g_state.board.ore[pos[1]][pos[0]]}")
+                    #print(f"{unit.unit_id} rb dig rubble = {rubble_num(g_state, pos)} pos = {pos}, ice = {unit.cargo.ice}, ore = {unit.cargo.ore}")
+                    #print(f"ice = {resoure_exist(g_state, pos, 0)}, ore = {resoure_exist(g_state, pos, 1)}")
                     action = unit.dig(True)
             if unit.cargo.ice > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
                 not all(unit_next_action(unit) == unit.move(direction_to(factory.pos, unit.pos))):
@@ -634,18 +715,18 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         env_cfg = g_state.env_cfg
         for i in range(0,env_cfg.map_size):
             for j in range(0,env_cfg.map_size):
-                if g_state.board.ice[j][i] == 1 :
+                if resoure_exist(g_state, np.array([i,j]), 0) == 1 :
                     ice_grids.append([i,j])
         return_grids = []
         for grid in ice_grids:
             for vec in adj_vecs:
                 target_grid = [grid[0]+vec[0], grid[1]+vec[1]]
-                if not(target_grid in return_grids) and not(pos_overrap_factory(g_state, np.array(target_grid))):
+                if not(target_grid in return_grids) and not(pos_overrap_factory(g_state, np.array(target_grid)))\
+                    and not pos_out_map(target_grid, g_state.env_cfg.map_size):
                     return_grids.append(target_grid)
         return np.array(return_grids)
 
     tokens = tokens.squeeze(0)
-
     actions = {}
     if(state.real_env_steps >= 0):
         #必要要素の計算
@@ -743,14 +824,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 #print("change")
                 actions[unit.unit_id] = [action]
     elif state.env_steps != 0:
-        def check_is_in(target_position:np.ndarray, position_array:np.ndarray):#左右対称がなくなったらイラン
-            is_in = False
-            for i in range(position_array.shape[0]):
-                if all(target_position == position_array[i]) or \
-                    (pos_on_factory(state, pos)[0] and f"player_{pos_on_factory(state, pos)[1].team_id}" == agent):
-                    is_in = True
-                    break
-            return is_in
         pos = np.zeros(2)
         for i in range(2):
             action_value = 0
@@ -759,19 +832,17 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 action_value += embedder[k]*tokens[k]
             grid = math.ceil(action_value * 48 % 48)
             pos[i] = grid
-        potential_spawns:np.ndarray = state.board.spawns[agent]
-        if not check_is_in(pos, potential_spawns):
-            if check_is_in(np.array([pos[0], env_cfg.map_size - pos[1]]), potential_spawns):
-                pos = np.array([pos[0], env_cfg.map_size - pos[1]])
-            elif check_is_in(np.array([env_cfg.map_size - pos[0], pos[1]]), potential_spawns):
-                pos = np.array([env_cfg.map_size - pos[0], pos[1]])
-            else:
-                print("no good pos")
         water_adjs:np.ndarray = water_adj_pos(state)
+        potential_spawns:np.ndarray = state.board.valid_spawns_mask
+        normal_potentials = []
+        for i in range(potential_spawns.shape[0]):
+            for j in range(potential_spawns.shape[1]):
+                if potential_spawns[i][j]:
+                    normal_potentials.append(np.array([i,j]))
         water_potentials = []
         for i in range(water_adjs.shape[0]):
-            for j in range(potential_spawns.shape[0]):
-                if all(water_adjs[i] == potential_spawns[j]):
+            for j in range(len(normal_potentials)):
+                if distance(water_adjs[i], normal_potentials[j]) == 0:
                     water_potentials.append(water_adjs[i])
         #print(water_potentials)
         length = 100
@@ -785,16 +856,17 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     index = i
                     length = length_
             print(f"drop {water_potentials[index]}")
-            actions = dict(spawn = water_potentials[index], metal = 100, water = 100)
+            actions = dict(spawn = water_potentials[index], metal = 150, water = 150)
         else:
-            for i in range(potential_spawns.shape[0]):
-                if pos_overrap_factory(state, potential_spawns[i]):
+            for i in range(len(normal_potentials)):
+                if pos_overrap_factory(state, normal_potentials[i]):
                     continue
-                length_ = abs(potential_spawns[i][0]-pos[0])+abs(potential_spawns[i][1]-pos[1])
+                length_ = abs(normal_potentials[i][0]-pos[0])+abs(normal_potentials[i][1]-pos[1])
                 if length_ < length:
                     index = i
                     length = length_
-            actions = dict(spawn = potential_spawns[index], metal = 100, water = 100)
+            print(f"drop {normal_potentials[index]}")
+            actions = dict(spawn = normal_potentials[index], metal = 150, water = 150)
     else:
         actions = dict(faction="AlphaStrike", bid = 0)
 
@@ -917,101 +989,6 @@ def env_to_tokens(state:GameState, unit_log, view_agent):#雑に作る。若干�
     tokens = np.concatenate((tokens, basics))
     
     #print(tokens.shape)
-    return tokens
-
-    board = state.board
-    agents = []
-    if view_agent == "player_0":
-        agents = ["player_0", "player_1"]
-    elif view_agent == "player_1":
-        agents = ["player_1", "player_0"]
-    else:
-        print("error tipo")
-    #まずはrubble
-    rubble_map = board.rubble
-    rubble_map = rubble_map.reshape((rubble_map.size // token_len, token_len))
-    tokens = rubble_map
-    #次にresources
-    ice_map = board.ice
-    ore_map = board.ore
-    resource_map = ice_map + 2 * ore_map
-    resource_map = resource_map.reshape((resource_map.size // token_len, token_len))
-    tokens = np.concatenate((tokens, resource_map))
-    #次にlichen
-    lichen_map = board.lichen
-    lichen_map = lichen_map.reshape((lichen_map.size // token_len, token_len))
-    tokens = np.concatenate((tokens, lichen_map))
-    #次にstrain
-    strain_map = board.lichen_strains
-    strain_map = strain_map.reshape((strain_map.size // token_len, token_len))
-    tokens = np.concatenate((tokens, strain_map))
-    #次にfactory(場所:2, リソース:5, strain_id:1, player:1)最高でも5個らしい
-    factory_info = np.zeros((1, token_len))
-    index_pos = 0
-    for agent in agents:
-        for factory in state.factories[agent].values():
-            factory_info[0][index_pos] = factory.pos[0] / 48
-            factory_info[0][index_pos+1] = factory.pos[1] / 48
-            cargo:UnitCargo = factory.cargo
-            factory_info[0][index_pos+2] = factory.power / 1000
-            factory_info[0][index_pos+3] = cargo.ice / 100
-            factory_info[0][index_pos+4] = cargo.ore / 100
-            factory_info[0][index_pos+5] = cargo.water / 100
-            factory_info[0][index_pos+6] = cargo.metal / 100
-            factory_info[0][index_pos+7] = factory.strain_id / 100
-            factory_info[0][index_pos+8] = 0 if agent == view_agent\
-                else 1
-            index_pos += 9
-    tokens = np.concatenate((tokens, factory_info))
-    #次にunit(場所:2, リソース:5, playerと種別:1, 次の行動:1)
-    unit_info_dim = 9
-    unit_num = 0
-    for agent in state.units:
-        unit_num += len(state.units[agent].values())
-    #unit_infos = np.zeros((unit_num//(token_len//unit_info_dim) + 1, token_len))
-    unit_infos = np.zeros((10, token_len))
-    x_index = 0
-    y_index = 0
-    for agent in agents:
-        for unit in state.units[agent].values():
-            unit_infos[x_index][y_index] = unit.pos[0] / 48
-            unit_infos[x_index][y_index+1] = unit.pos[1] / 48
-            cargo:UnitCargo = unit.cargo
-            unit_infos[x_index][y_index+2] = unit.power / 1000
-            unit_infos[x_index][y_index+3] = cargo.ice / 100
-            unit_infos[x_index][y_index+4] = cargo.ore / 100
-            unit_infos[x_index][y_index+5] = cargo.water / 100
-            unit_infos[x_index][y_index+6] = cargo.metal / 100
-            if agent == view_agent:
-                if unit.unit_type == "LIGHT":
-                    unit_infos[x_index][y_index+7] = 0.5
-                else:
-                    unit_infos[x_index][y_index+7] = 1
-            else:
-                if unit.unit_type == "LIGHT":
-                    unit_infos[x_index][y_index+7] = -0.5
-                else:
-                    unit_infos[x_index][y_index+7] = -1
-            direction_value = unit_log[unit.unit_id][1]/4
-            unit_infos[x_index][y_index+8] = direction_value
-            y_index += unit_info_dim
-            if y_index+unit_info_dim > token_len:
-                y_index = 0
-                x_index += 1
-    tokens = np.concatenate((tokens, unit_infos))
-    #ラスト基本情報
-    basics = np.zeros((1, token_len))
-    basics[0][0] = state.real_env_steps / state.env_cfg.max_episode_length
-    if state.real_env_steps < 0:
-        pass
-    elif state.env_cfg.max_episode_length - state.real_env_steps > token_len - 1:
-        #print(state.weather_schedule[state.real_env_steps:state.real_env_steps+token_len-1])
-        basics[0][1:] = state.weather_schedule[state.real_env_steps:state.real_env_steps+token_len-1]
-    elif state.real_env_steps < state.env_cfg.max_episode_length:
-        #print(state.weather_schedule[state.real_env_steps:])
-        basics[0][1:1+state.env_cfg.max_episode_length - state.real_env_steps] = state.weather_schedule[state.real_env_steps:]
-    tokens = np.concatenate((tokens, basics))
-    
     return tokens
 
 #近傍アクション生成機
