@@ -577,17 +577,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 action = unit.move(direction_to(target_pos, unit.pos), repeat=-1)
 
         if unit.unit_type == "HEAVY":
-            enemy_units = g_state.units[enemy_team_id].values()
-            target_unit = None
-            for enemy_unit in enemy_units:
-                ds = [enemy_unit.pos[0] - unit.pos[0], enemy_unit.pos[1] - unit.pos[1]]
-                dist = abs(ds[0]) + abs(ds[1])
-                if dist == 1 and enemy_unit.unit_type == "HEAVY":
-                    target_unit = enemy_unit
-            if not(target_unit is None):#隣に敵のHEAVYがいる場合は突進する(この判定は独自に行う（優先度最低）
-                #print(f"in {g_state.real_env_steps}, {unit.unit_id} charges {target_unit.unit_id}!")
-                action = unit.move(direction_to(unit.pos, target_unit.pos), repeat=-1)
-            elif rubble_num(state, unit.pos) > 0:#隣に敵がいない時足元にrubbleがあれば採掘します。
+            if rubble_num(state, unit.pos) > 0:#隣に敵がいない時足元にrubbleがあれば採掘します。
                 action = unit.dig(repeat=-1)
             if in_terr and exist and not(factory_terr.unit_id == factory_base.unit_id):#所属外のfactory範囲内であれば引き返します。
                 action = log_calc(state, unit, unit_log[unit.unit_id][0])[0]
@@ -665,11 +655,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if unit.cargo.ice > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and\
                 not is_the_same_action(unit_next_action(unit), unit.move(direction_to(factory.pos, unit.pos), repeat=-1)):
                 action = unit.transfer(direction_factory, 0, unit.cargo.ice, repeat=0)
-                #print(f"{unit.unit_id} rb passing ice {unit.cargo.ice}")
             if unit.cargo.ore > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and factory.cargo.water > (env_cfg.max_episode_length - g_state.real_env_steps) and\
                 not is_the_same_action(unit_next_action(unit), unit.move(direction_to(factory.pos, unit.pos), repeat=-1)):
                 action = unit.transfer(direction_factory, 1, unit.cargo.ore, repeat=0)
-                #print(f"{unit.unit_id} rb passing ore {unit.cargo.ore}")
         elif not unit_on_factory(g_state, unit)[0] and unit.unit_type == "HEAVY":
             if len(unit_log[unit.unit_id][0]) > 1:
                 return_action, cost = log_calc(g_state, unit, unit_log[unit.unit_id][0])
@@ -680,6 +668,21 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     #すごく強くなるようならここを取る。
                     action = unit.dig(repeat=-1)
                     #print(f"{unit.unit_id} remote dig pow {unit.power}")
+        if unit.unit_type == "HEAVY":
+            #隣に敵がいる場合のHEAVYは最優先の生存で。敵とパワーを比較し、低ければ（または機関に必要なパワーギリギリなら）撤退を。
+            enemy_units = g_state.units[enemy_team_id].values()
+            target_unit = None
+            for enemy_unit in enemy_units:
+                ds = [enemy_unit.pos[0] - unit.pos[0], enemy_unit.pos[1] - unit.pos[1]]
+                dist = abs(ds[0]) + abs(ds[1])
+                if dist == 1 and enemy_unit.unit_type == "HEAVY":
+                    target_unit = enemy_unit
+            if not(target_unit is None):
+                return_action, cost = log_calc(g_state, unit, unit_log[unit.unit_id][0])
+                if target_unit.power < unit.power and cost + unit.unit_cfg.MOVE_COST * 5 < unit.power:
+                    action = unit.move(direction_to(unit.pos, target_unit.pos), repeat=-1)
+                else:
+                    action = return_action
 
         return action
 
