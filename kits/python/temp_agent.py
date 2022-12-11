@@ -20,7 +20,7 @@ factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.arra
     np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
-restart_epoch = 41
+restart_epoch = 111
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -73,6 +73,10 @@ def rubble_num(g_state:GameState, pos:np.ndarray):
 
 def lichen_num(g_state:GameState, pos:np.ndarray):
     return g_state.board.lichen[pos[0]][pos[1]]
+
+def unit_id_num(unit:Unit):
+    str_id = unit.unit_id
+    return int(str_id.split("_")[1])
 
 def factory_adj_grids(factory:Factory, env_cfg:EnvConfig):
     direction_list = [[0,2], [1,2], [-1,2], [2,0], [2,-1], [2,1], [-2,1], [-2,0], [-2,-1], [0,-2], [1,-2], [-1,-2]]
@@ -277,6 +281,15 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen):
             destruct_pos.append(np.frombuffer(pos_byte, dtype=np.int32))
     return dig_pos, destruct_pos
 
+def get_chase_points(g_state:GameState, view_agent):
+    opp_agent = "player_1" if view_agent == "player_0" else "player_0"
+    opp_units = g_state.units[opp_agent]
+    return_list = []
+    for _, opp_unit in opp_units.items():
+        if resoure_exist(g_state, opp_unit.pos, 0) or  resoure_exist(g_state, opp_unit.pos, 1):
+            return_list.append(opp_unit.pos)
+    return return_list
+
 def path_finding_direction_to(g_state:GameState, src:np.ndarray, tgt:np.ndarray, team_id:int, initial_direction:int = 0, avoid_opp_heavy = True):
     board:np.ndarray = np.zeros((g_state.env_cfg.map_size, g_state.env_cfg.map_size))
     opp_factories = g_state.factories[f"player_{1-team_id}"]
@@ -290,10 +303,15 @@ def path_finding_direction_to(g_state:GameState, src:np.ndarray, tgt:np.ndarray,
     for _, unit in my_units.items():
         if distance(src, unit.pos) > 0:
             board[unit.pos[0]][unit.pos[1]] = 1
+            if distance(src, unit.pos) == 2:
+                for vec in orth_adj_list:
+                    grid = unit.pos + np.array(vec)
+                    if not pos_out_map(grid, g_state.env_cfg.map_size) and not distance(src, grid) == 0:
+                        board[grid[0]][grid[1]] = 1
     for _, unit in opp_units.items():
         if distance(src, unit.pos) > 0 and unit.unit_type == "HEAVY" and avoid_opp_heavy:
             for vec in orth_adj_list:
-                if not pos_out_map(unit.pos + vec, g_state.env_cfg.map_size):
+                if not pos_out_map(unit.pos + vec, g_state.env_cfg.map_size) and not distance(src, unit.pos + vec) == 0:
                     board[unit.pos[0] + vec[0]][unit.pos[1] + vec[1]] = 1
     dist = 0
     distance_pos_dict = {dist:[(tgt, 0)]}
@@ -474,7 +492,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         unit_cfg = unit.unit_cfg
         if len(log) < 2:
             print("error, not much log len")
-        direction = direction_to(log[0], log[1])
+            direction = 0
+        else:
+            direction = direction_to(log[0], log[1])
         return_cost = 0
         return_cost += (len(log)-1) * unit_cfg.MOVE_COST
         for i in range(1, len(log) - 1):
@@ -483,7 +503,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         
         return unit.move(direction, repeat=-1), return_cost
 
-    def rulebased_unit(g_state:GameState, unit:Unit, tactical_points, factory_pos_dict):
+    def rulebased_unit(g_state:GameState, unit:Unit, tactical_points, factory_pos_dict, chase_pos):
         my_team_id = "player_0" if unit.team_id == 0 else "player_1"
         enemy_team_id = "player_1" if unit.team_id == 0 else "player_0"
         action = None
@@ -498,12 +518,12 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             
             heavy_list = []
             my_light_list = []
-            for unit_ in state.units[my_team_id].values():
+            for unit_ in my_units.values():
                 if unit_.unit_type == "HEAVY":
                     heavy_list.append(unit_.pos)
                 if unit_.unit_type == "LIGHT":
-                    my_light_list.append(unit_.pos)
-            for unit_ in state.units[enemy_team_id].values():
+                    my_light_list.append(unit_)
+            for unit_ in opp_units.values():
                 if unit_.unit_type == "HEAVY":
                     heavy_list.append(unit_.pos)
 
@@ -513,13 +533,15 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             for d_pos in tactical_points:
                 my_dist = distance(d_pos, unit.pos)
                 nearest = True
-                for l_pos in my_light_list:
+                for l_rob in my_light_list:
+                    l_pos:np.ndarray = l_rob.pos
                     at_another_pos = False
                     for d_pos_ in tactical_points:
                         if distance(d_pos_, l_pos) == 0 and distance(d_pos, d_pos_) > 0:
                             at_another_pos = True
                             break
-                    if distance(d_pos, l_pos) <= my_dist and not at_another_pos:
+                    if (distance(d_pos, l_pos) < my_dist or (distance(d_pos, l_pos) == my_dist and unit_id_num(unit) < unit_id_num(l_rob))) and\
+                        distance(l_pos, unit.pos) > 0 and not at_another_pos:
                         nearest = False
                         break
                 if nearest:
@@ -544,13 +566,26 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                                 break
                         else:
                             action = unit.move(attack_direction, repeat=-1)
-
+            if is_on and unit.power < unit.unit_cfg.BATTERY_CAPACITY-10:
+                action = unit.pickup(4, min(factory_on.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power))
             if (action is None and unit.power > 10):
                 #第二候補として、敵のlight_robotでかつ資源上にいるものがいればそれを対象に突進するが、追いかけっこ可能なエネルギーは残しておく
-                for _, unit_ in opp_units.items():
-                    if unit_.unit_type == "LIGHT" and (resoure_exist(g_state, unit_.pos, 0) or resoure_exist(g_state, unit_.pos, 1))\
-                        and not pos_on_factory(g_state, unit_.pos)[0]:
-                        action = unit.move(path_finding_direction_to(g_state, unit.pos, unit_.pos, unit.team_id), repeat=-1)
+                for d_pos in chase_pos:
+                    my_dist = distance(d_pos, unit.pos)
+                    nearest = True
+                    for l_rob in my_light_list:
+                        l_pos:np.ndarray = l_rob.pos
+                        at_another_pos = False
+                        for d_pos_ in tactical_points:
+                            if distance(d_pos_, l_pos) == 0 and distance(d_pos, d_pos_) > 0:
+                                at_another_pos = True
+                                break
+                        if (distance(d_pos, l_pos) < my_dist or (distance(d_pos, l_pos) == my_dist and unit_id_num(unit) < unit_id_num(l_rob))) and\
+                            distance(l_pos, unit.pos) > 0 and not at_another_pos:
+                            nearest = False
+                            break
+                    if nearest:
+                        action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id), repeat=-1)
             if (action is None):
                 #攻撃対象がいないまたはエネルギーが少ない場合。これは生存本能になる。
                 if adj:
@@ -581,8 +616,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 action = unit.dig(repeat=-1)
             if in_terr and exist and not(factory_terr.unit_id == factory_base.unit_id):#所属外のfactory範囲内であれば引き返します。
                 action = log_calc(state, unit, unit_log[unit.unit_id][0])[0]
-        if unit.unit_type == "HEAVY" and exist and (factory_base.cargo.water < env_cfg.max_episode_length - state.real_env_steps + len(factory_pos_dict[factory_base.unit_id]) * 10\
-             or env_cfg.max_episode_length * 0.8< g_state.env_steps):
+        if unit.unit_type == "HEAVY" and exist and (factory_base.cargo.water < env_cfg.max_episode_length - state.real_env_steps + len(factory_pos_dict[factory_base.unit_id]) * 10):
             #初期生産でかつ水資源に余裕がなければ所属ファクトリー周辺の水資源を探す(生存本能の次)
             #さらに、最後の方では水やりをするためにたっぷり水を確保してくる。場合によっては一生水を確保し続けることに。
             search_center = factory_base.pos
@@ -615,7 +649,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     total_light_num += 1
                 if distance(unit_.pos, factory_base.pos) == 0:
                     on_base = True
-            if total_light_num < len(tactical_points) and not on_base:#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
+            if total_light_num < len(tactical_points) or not on_base:#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
                 search_center = factory_base.pos
                 adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
                 second_adj_vecs = np.array([[3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
@@ -668,20 +702,21 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     #すごく強くなるようならここを取る。
                     action = unit.dig(repeat=-1)
                     #print(f"{unit.unit_id} remote dig pow {unit.power}")
-        if unit.unit_type == "HEAVY":
+        if unit.unit_type == "HEAVY" and not is_on:
             #隣に敵がいる場合のHEAVYは最優先の生存で。敵とパワーを比較し、低ければ（または機関に必要なパワーギリギリなら）撤退を。
             enemy_units = g_state.units[enemy_team_id].values()
             target_unit = None
             for enemy_unit in enemy_units:
-                ds = [enemy_unit.pos[0] - unit.pos[0], enemy_unit.pos[1] - unit.pos[1]]
-                dist = abs(ds[0]) + abs(ds[1])
-                if dist == 1 and enemy_unit.unit_type == "HEAVY":
+                if distance(enemy_unit.pos, unit.pos) == 1 and enemy_unit.unit_type == "HEAVY":
                     target_unit = enemy_unit
             if not(target_unit is None):
+                print("enemy_near!")
                 return_action, cost = log_calc(g_state, unit, unit_log[unit.unit_id][0])
                 if target_unit.power < unit.power and cost + unit.unit_cfg.MOVE_COST * 5 < unit.power:
+                    print(f"{unit.unit_id} offend")
                     action = unit.move(direction_to(unit.pos, target_unit.pos), repeat=-1)
                 else:
+                    print(f"{unit.unit_id} deffend")
                     action = return_action
 
         return action
@@ -711,6 +746,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         dig_pos, destruct_pos = get_tactical_points(state, my_lichen, opp_lichen)
         total_tactical_pos = destruct_pos
         total_tactical_pos.extend(dig_pos)
+        chase_pos = get_chase_points(state, agent)
 
         for index, factory in enumerate(my_factories.values()):
             action = rulebased_factory(state, factory, factory_pos_dict)
@@ -722,7 +758,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if(unit.power < unit.action_queue_cost(state)):
                 continue
             
-            action = rulebased_unit(state, unit, total_tactical_pos, factory_pos_dict)
+            action = rulebased_unit(state, unit, total_tactical_pos, factory_pos_dict, chase_pos)
             if action is None:
                 embedder = robot_embedder(index)
                 action_value = 0
@@ -832,7 +868,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 if length_ < length:
                     index = i
                     length = length_
-            print(f"drop {water_potentials[index]}")
             actions = dict(spawn = water_potentials[index], metal = 150, water = 150)
         else:
             for i in range(len(normal_potentials)):
@@ -842,7 +877,6 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 if length_ < length:
                     index = i
                     length = length_
-            print(f"drop {normal_potentials[index]}")
             actions = dict(spawn = normal_potentials[index], metal = 150, water = 150)
     else:
         actions = dict(faction="AlphaStrike", bid = 0)
