@@ -2,25 +2,24 @@ from lux.kit import obs_to_game_state, GameState, EnvConfig, Team, Factory, Unit
 from lux.utils import direction_to, is_the_same_action, secondery_directiopn_to, move_effective_direction_to, secondary_move_effective_direction_to
 import numpy as np
 import sys
-from typing import Dict
 from luxai_runner.utils import to_json
 import json
 from luxai2022 import LuxAI2022
-import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from typing import Tuple
+from typing import Tuple, Dict
 from torch.utils.data import DataLoader
 import math
 import random
+import time
 
 orth_adj_list = [np.array([0,1]), np.array([0,-1]), np.array([-1,0]), np.array([1,0])]
 factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.array([-1,0]), np.array([1,0]),\
     np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
-restart_epoch = 111
+restart_epoch = 151
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -291,6 +290,13 @@ def get_chase_points(g_state:GameState, view_agent):
     return return_list
 
 def path_finding_direction_to(g_state:GameState, src:np.ndarray, tgt:np.ndarray, team_id:int, initial_direction:int = 0, avoid_opp_heavy = True):
+    if type(src) == list:
+        src = np.array(src)
+    if type(tgt) == list:
+        tgt = np.array(tgt)
+    if distance(src, tgt) == 0:
+        #print("path finding same grids")
+        return 0, 0
     board:np.ndarray = np.zeros((g_state.env_cfg.map_size, g_state.env_cfg.map_size))
     opp_factories = g_state.factories[f"player_{1-team_id}"]
     my_units = g_state.units[f"player_{team_id}"]
@@ -370,7 +376,7 @@ def path_finding_direction_to(g_state:GameState, src:np.ndarray, tgt:np.ndarray,
                     else:
                         distance_pos_dict[dist+1] = [(check_grid, move_num)]
         dist += 1
-    return direction
+    return direction, dist
 
 def factory_output_linkage(g_state:GameState, factory_pos:np.ndarray, direction:int):
     direction_dict = {0:[0,0], 1:[0,-1], 2:[1, 0], 3:[0,1], 4:[-1,0]}
@@ -478,7 +484,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 overrap = True
                 break
         if factory.cargo.water - (env_cfg.max_episode_length - g_state.real_env_steps) >\
-            max(factory.water_cost(g_state), len(factory_pos_dict[factory.unit_id]) / 30) * (env_cfg.max_episode_length - g_state.real_env_steps):
+            max(factory.water_cost(g_state), len(factory_pos_dict[factory.unit_id]) / 30) * (env_cfg.max_episode_length - g_state.real_env_steps) and\
+                len(factory_pos_dict[factory.unit_id]) > 0:
             #print("rb watering")
             action = factory.water()
         elif factory.cargo.metal >= factory.build_heavy_metal_cost(state) and factory.power >= factory.build_heavy_power_cost(state) and not overrap:
@@ -546,7 +553,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                         break
                 if nearest:
                     if my_dist > 0:
-                        action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id), repeat=-1)
+                        action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id)[0], repeat=-1)
                         continue
                     else:
                         attack_direction = 0 
@@ -568,34 +575,91 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                             action = unit.move(attack_direction, repeat=-1)
             if is_on and unit.power < unit.unit_cfg.BATTERY_CAPACITY-10:
                 action = unit.pickup(4, min(factory_on.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power))
-            if (action is None and unit.power > 10):
+            home_direction = 0
+            pow_cost = 0
+            if action is None and exist:#ここはホーム方向とそのコストの計算
+                home_direction, pow_cost = path_finding_direction_to(g_state, unit.pos, factory_base.pos, unit.team_id)
+            if (action is None and (home_direction == 0 or pow_cost * 1.1 < unit.power)):
                 #第二候補として、敵のlight_robotでかつ資源上にいるものがいればそれを対象に突進するが、追いかけっこ可能なエネルギーは残しておく
                 for d_pos in chase_pos:
                     my_dist = distance(d_pos, unit.pos)
                     nearest = True
                     for l_rob in my_light_list:
                         l_pos:np.ndarray = l_rob.pos
-                        at_another_pos = False
-                        for d_pos_ in tactical_points:
-                            if distance(d_pos_, l_pos) == 0 and distance(d_pos, d_pos_) > 0:
-                                at_another_pos = True
+                        at_tactical_pos = False
+                        for t_pos in tactical_points:
+                            if distance(t_pos, l_pos) == 0 and distance(d_pos, t_pos) > 0:
+                                at_tactical_pos = True
                                 break
                         if (distance(d_pos, l_pos) < my_dist or (distance(d_pos, l_pos) == my_dist and unit_id_num(unit) < unit_id_num(l_rob))) and\
-                            distance(l_pos, unit.pos) > 0 and not at_another_pos:
+                            distance(l_pos, unit.pos) > 0 and not at_tactical_pos:
                             nearest = False
                             break
                     if nearest:
-                        action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id), repeat=-1)
+                        action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id)[0], repeat=-1)
             if (action is None):
                 #攻撃対象がいないまたはエネルギーが少ない場合。これは生存本能になる。
-                if adj:
+                if adj and not unit.team_id == factory.team_id:
                     action = unit.move(direction_to(factory.pos, unit.pos), repeat=-1)
                 for _, unit_ in opp_units.items():
                     if unit_.unit_type == "HEAVY" and distance(unit.pos, unit_.pos) == 1:
-                        action = unit.move(direction_to(unit_.pos, unit.pos), repeat=-1)
+                        if not home_direction == 0:
+                            action = unit.move(home_direction, repeat=-1)
+                        else:
+                            action = unit.move(direction_to(unit_.pos, unit.pos), repeat=-1)
                     if unit_.unit_type == "LIGHT" and distance(unit.pos, unit_.pos) == 1:
-                        action = unit.move(direction_to(unit.pos, unit_.pos), repeat=-1)
+                        if unit_.power > unit.power and pow_cost * 1.1 < unit.power and not home_direction == 0:
+                            action = unit.move(home_direction, repeat=-1)
+                        else:
+                            action = unit.move(direction_to(unit.pos, unit_.pos), repeat=-1)
                         break
+            if action is None and exist and unit.power >= pow_cost * 2 and unit.power > unit.dig_cost(g_state):
+                #何もやることがなさ過ぎて暇なら領土拡大を図る
+                possible_grids = []
+                nearest_heavy = None
+                length = 10
+                for _, unit_ in my_units.items():
+                    if unit_.unit_type == "HEAVY" and distance(unit_.pos, factory_base.pos) < length:
+                        nearest_heavy = unit_
+                        length = distance(unit_.pos, factory_base.pos)
+                factory_grids = factory_pos_dict[factory_base.unit_id]
+                if len(factory_grids) == 0:
+                    for grid in factory_adj_grids(factory_base, g_state.env_cfg):
+                        possible_grids.append(grid)
+                else:
+                    for grid in factory_grids:
+                        grid_byte = grid.astype(np.int32).tobytes()
+                        if grid_byte in my_lichen:
+                            for vec in orth_adj_list:
+                                target_grid = grid + vec
+                                if not pos_out_map(target_grid, g_state.env_cfg.map_size) and rubble_num(g_state, target_grid) < 100 - my_lichen[grid_byte] * 10 and\
+                                    (nearest_heavy is None or distance(nearest_heavy.pos, target_grid) > 3) and 0 < rubble_num(g_state, target_grid):
+                                    possible_grids.append(target_grid)
+                if len(possible_grids) > 0:
+                    now_dist = 100
+                    target_pos = np.array([-1,-1])
+                    for f_pos in possible_grids:
+                        my_dist = distance(f_pos, unit.pos)
+                        nearest = True
+                        for l_rob in my_light_list:
+                            l_pos:np.ndarray = l_rob.pos
+                            if (distance(f_pos, l_pos) < my_dist or (distance(f_pos, l_pos) == my_dist and unit_id_num(unit) < unit_id_num(l_rob))) and\
+                                distance(l_pos, unit.pos) > 0:
+                                nearest = False
+                                break
+                        if nearest and my_dist < now_dist:
+                            now_dist = my_dist
+                            target_pos = f_pos
+                    if 0 < now_dist and now_dist < 30:
+                        #print(f"{g_state.real_env_steps} {unit.unit_id} go to {target_pos} from {unit.pos}")
+                        action = unit.move(path_finding_direction_to(g_state, unit.pos, target_pos, unit.team_id)[0], repeat=-1)
+                    elif now_dist == 0:
+                        #print(f"{g_state.real_env_steps} {unit.unit_id} dig at {target_pos} cost {pow_cost}, pow {unit.power}")
+                        action = unit.dig(repeat=-1)
+            if action is None and not home_direction == 0 and pow_cost < unit.power and unit.power < pow_cost * 2:
+                #可能なら帰巣
+                #print(f"{g_state.real_env_steps} {unit.unit_id} returning home direction {home_direction}, power {unit.power}, cost {pow_cost}")
+                action = unit.move(home_direction, repeat=-1)
             if (action is None):
                 action = unit.move(0, repeat=-1)
             #生存本能(隣接避け、多少のクラッシュは仕方なし(学習しろ))
@@ -617,8 +681,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if in_terr and exist and not(factory_terr.unit_id == factory_base.unit_id):#所属外のfactory範囲内であれば引き返します。
                 action = log_calc(state, unit, unit_log[unit.unit_id][0])[0]
         if unit.unit_type == "HEAVY" and exist and (factory_base.cargo.water < env_cfg.max_episode_length - state.real_env_steps + len(factory_pos_dict[factory_base.unit_id]) * 10):
-            #初期生産でかつ水資源に余裕がなければ所属ファクトリー周辺の水資源を探す(生存本能の次)
-            #さらに、最後の方では水やりをするためにたっぷり水を確保してくる。場合によっては一生水を確保し続けることに。
+            #初期生産でかつ水資源に余裕がなければ所属ファクトリー周辺の水資源を探す(生存本能の次)。場合によっては一生水を確保し続けることに。
             search_center = factory_base.pos
             adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
             second_adj_vecs = np.array([[3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
@@ -649,7 +712,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     total_light_num += 1
                 if distance(unit_.pos, factory_base.pos) == 0:
                     on_base = True
-            if total_light_num < len(tactical_points) or not on_base:#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
+            if (total_light_num < len(tactical_points) + len(chase_pos) or not on_base) and factory_base.cargo.metal < factory_base.build_heavy_metal_cost(g_state):#場に自分のlight_unitが一定数以下しか存在しない場合は自身の周りにoreがある場合に掘りに行く(優先度さらに低)
                 search_center = factory_base.pos
                 adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
                 second_adj_vecs = np.array([[3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
@@ -682,7 +745,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 #print(f"{unit.unit_id} rb move dir = {direction_factory} from {unit.pos} to {factory.pos}")
             elif unit.power >= unit.dig_cost(g_state) + unit.move_cost(g_state, direction_factory):
                 pos = unit.pos
-                if resoure_exist(g_state, pos, 0) or resoure_exist(g_state, pos, 1) and unit.unit_type == "HEAVY":
+                if (resoure_exist(g_state, pos, 0) or resoure_exist(g_state, pos, 1)) and unit.unit_type == "HEAVY":
                     #print(f"{unit.unit_id} rb dig rubble = {rubble_num(g_state, pos)} pos = {pos}, ice = {unit.cargo.ice}, ore = {unit.cargo.ore}")
                     #print(f"ice = {resoure_exist(g_state, pos, 0)}, ore = {resoure_exist(g_state, pos, 1)}")
                     action = unit.dig(repeat=-1)
@@ -712,7 +775,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if not(target_unit is None):
                 print("enemy_near!")
                 return_action, cost = log_calc(g_state, unit, unit_log[unit.unit_id][0])
-                if target_unit.power < unit.power and cost + unit.unit_cfg.MOVE_COST * 5 < unit.power:
+                if target_unit.power < unit.power and cost + unit.unit_cfg.MOVE_COST * 5 < unit.power and not in_terr:
                     print(f"{unit.unit_id} offend")
                     action = unit.move(direction_to(unit.pos, target_unit.pos), repeat=-1)
                 else:
@@ -1484,7 +1547,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.14.2 restart from epoch {restart_epoch}")
+        print(f"ver1.15.2 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
