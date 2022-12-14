@@ -19,7 +19,7 @@ factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.arra
     np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
-restart_epoch = 151
+restart_epoch = 171
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -484,7 +484,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 overrap = True
                 break
         if factory.cargo.water - (env_cfg.max_episode_length - g_state.real_env_steps) >\
-            max(factory.water_cost(g_state), len(factory_pos_dict[factory.unit_id]) / 30) * (env_cfg.max_episode_length - g_state.real_env_steps) and\
+            max(factory.water_cost(g_state), len(factory_pos_dict[factory.unit_id]) / 40) * (env_cfg.max_episode_length - g_state.real_env_steps) and\
                 len(factory_pos_dict[factory.unit_id]) > 0:
             #print("rb watering")
             action = factory.water()
@@ -698,12 +698,15 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                     target_pos = search_center + second_adj_vecs[i]
                     if target_pos[0] < 0 or env_cfg.map_size-1 < target_pos[0] or target_pos[1] < 0 or env_cfg.map_size-1 < target_pos[1]:
                         continue
-                    if resoure_exist(g_state, search_center + second_adj_vecs[i], 0):
-                        ice_pos = search_center+second_adj_vecs[i]
+                    if resoure_exist(g_state, target_pos, 0):
+                        ice_pos = target_pos
                         break
-            if not (ice_pos is None):
-                #print(f"{unit.unit_id} is assigned {factory_base.unit_id} found ice at {ice_pos}")
-                action = unit.move(direction_to(unit.pos, ice_pos), repeat=-1)
+            if not (ice_pos is None) and unit.power > unit.dig_cost(g_state):
+                if (distance(ice_pos, unit.pos) < 3 and rubble_num(g_state, unit.pos) > 0) or distance(ice_pos, unit.pos) == 0:
+                    action = unit.dig()
+                else:
+                    #print(f"{unit.unit_id} is assigned {factory_base.unit_id} found ice at {ice_pos}")
+                    action = unit.move(direction_to(unit.pos, ice_pos), repeat=-1)
         elif unit.unit_type == "HEAVY" and exist:
             total_light_num = 0
             on_base = False
@@ -737,7 +740,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
 
         if is_on and unit.power < unit.unit_cfg.DIG_COST * 3:
             #print(f"{unit.unit_id} rb pickup")
-            action = unit.pickup(4, min(unit.unit_cfg.DIG_COST * 5, factory_on.power), repeat=-1)
+            action = unit.pickup(4, min(unit.unit_cfg.BATTERY_CAPACITY - unit.power, factory_on.power), repeat=-1)
         elif adj:
             direction_factory = direction_to(unit.pos, factory.pos)
             if unit.power < unit.dig_cost(g_state) * 2 + unit.move_cost(g_state, direction_factory):
@@ -785,7 +788,8 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
         return action
 
     def water_adj_pos(g_state:GameState):
-        adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2]])
+        adj_vecs = np.array([[2,0],[2,1],[2,-1],[-2,0],[-2,1],[-2,-1],[0,2],[1,2],[-1,2],[0,-2],[1,-2],[-1,-2],\
+            [3,0],[3,1],[3,-1],[-3,0],[-3,1],[-3,-1],[0,3],[1,3],[-1,3],[0,-3],[1,-3],[-1,-3],[2,2],[2,-2],[-2,2],[-2,-2]])
         ice_grids = []
         env_cfg = g_state.env_cfg
         for i in range(0,env_cfg.map_size):
