@@ -19,7 +19,7 @@ factory_area_list = [np.array([0,0]), np.array([0,1]), np.array([0,-1]), np.arra
     np.array([1,1]), np.array([1,-1]), np.array([-1,1]), np.array([-1,-1])]
 
 #config
-restart_epoch = 171
+restart_epoch = 201
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 token_len = 288
@@ -230,7 +230,7 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen, my_factories):
         resource_pos_list = []
         for i in range(g_state.env_cfg.map_size):
             for j in range(g_state.env_cfg.map_size):
-                grid_ = np.ndarray([i,j])
+                grid_ = np.array([i,j])
                 if resoure_exist(g_state, grid_, 0) or resoure_exist(g_state, grid_, 1):
                     resource_pos_list.append(grid_)
         temp_list = []
