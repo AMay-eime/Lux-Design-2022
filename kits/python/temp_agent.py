@@ -234,7 +234,7 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen, my_factories):
                 if resoure_exist(g_state, grid_, 0) or resoure_exist(g_state, grid_, 1):
                     resource_pos_list.append(grid_)
         temp_list = []
-        for _, factory_ in my_factories:
+        for _, factory_ in my_factories.items():
             pos_dist_dict = {}
             for pos_ in resource_pos_list:
                 max_item = (0, 100)
