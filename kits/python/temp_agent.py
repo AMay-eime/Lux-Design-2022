@@ -242,8 +242,8 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen, my_factories):
                     max_item = max(pos_dist_dict.items(), key = lambda x:x[1])
                 dist = distance(factory_.pos, pos_)
                 near_factory = False
-                for _, factory_a in my_factories:
-                    if distance(factory_a, pos_) < factory_territory * 3:
+                for _, factory_a in my_factories.items():
+                    if distance(factory_a.pos, pos_) < factory_territory * 3:
                         near_factory = True
                         break
                 if dist < max_item[1] and not near_factory:
@@ -584,7 +584,9 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                         break
                 if nearest:
                     if my_dist > 0:
-                        action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id)[0], repeat=-1)
+                        dir_path = path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id)[0]
+                        if not dir_path == 0:
+                            action = unit.move(path_finding_direction_to(g_state, unit.pos, d_pos, unit.team_id)[0], repeat=-1)
                         continue
                     else:
                         attack_direction = 0 
@@ -601,12 +603,17 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                                 break
                             else:
                                 action = unit.move(0, repeat=-1)
+                                #print(f"{g_state.real_env_steps} {unit.unit_id} is on tactical and wait")
                                 break
                         else:
+                            #print(f"{g_state.real_env_steps} {unit.unit_id} is disturbed")
                             action = unit.move(attack_direction, repeat=-1)
             if is_on and unit.power < unit.unit_cfg.BATTERY_CAPACITY-10:
                 action = unit.pickup(4, min(factory_on.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power))
-            home_direction, pow_cost = path_finding_direction_to(g_state, unit.pos, factory_base.pos, unit.team_id)
+            home_direction = 0 
+            pow_cost = 0
+            if exist: 
+                home_direction, pow_cost = path_finding_direction_to(g_state, unit.pos, factory_base.pos, unit.team_id)
             if (action is None and (home_direction == 0 or pow_cost * 1.1 < unit.power)):
                 #第二候補として、敵のlight_robotでかつ資源上にいるものがいればそれを対象に突進するが、追いかけっこ可能なエネルギーは残しておく
                 for d_pos in chase_pos:
@@ -640,9 +647,11 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                             action = unit.move(home_direction, repeat=-1)
                             break
                         elif not pos_on_factory(g_state, unit_.pos):
+                            #print(f"{g_state.real_env_steps} {unit.unit_id} hanted too far")
                             action = unit.move(direction_to(unit.pos, unit_.pos), repeat=-1)
                             break
                         else:
+                            #print(f"{g_state.real_env_steps} {unit.unit_id} hanting")
                             action = unit.move(direction_to(unit_.pos, unit.pos), repeat=-1)
             if action is None and exist and unit.power >= pow_cost * 2 and unit.power > unit.dig_cost(g_state):
                 #何もやることがなさ過ぎて暇なら領土拡大を図る
@@ -792,12 +801,15 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
             if unit.cargo.ore > unit.unit_cfg.DIG_RESOURCE_GAIN * 5 and factory.cargo.water > (env_cfg.max_episode_length - g_state.real_env_steps) and\
                 not is_the_same_action(unit_next_action(unit), unit.move(direction_to(factory.pos, unit.pos), repeat=-1)):
                 action = unit.transfer(direction_factory, 1, unit.cargo.ore, repeat=0)
-        elif not unit_on_factory(g_state, unit)[0] and (unit.unit_type == "HEAVY" or g_state.real_env_steps < tactical_check_step):
+        elif not unit_on_factory(g_state, unit)[0] and (unit.unit_type == "HEAVY" or g_state.real_env_steps < tactical_check_step) and exist:
             if len(unit_log[unit.unit_id][0]) > 1:
                 return_action, cost = log_calc(g_state, unit, unit_log[unit.unit_id][0])
+                home_direction, pow_cost = path_finding_direction_to(g_state, unit.pos, factory_base.pos, unit.team_id)
                 if unit.power < cost + unit.unit_cfg.MOVE_COST * 10 + unit.unit_cfg.DIG_COST and unit.power >= unit.unit_cfg.MOVE_COST:
-                    action = return_action
-                    #print(f"{unit.unit_id} remote return len {len(unit_log[unit.unit_id])-1} where {unit_log[unit.unit_id]}")
+                    if not home_direction == 0 and unit.unit_type == "LIGHT":
+                        action = unit.move(home_direction, repeat = -1)
+                    elif unit.unit_type == "HEAVY":
+                        action = return_action
                 elif unit.power >= unit.unit_cfg.DIG_COST and (resoure_exist(g_state, unit.pos, 0) or resoure_exist(g_state, unit.pos, 1)) and unit.unit_type == "HEAVY":
                     #すごく強くなるようならここを取る。
                     action = unit.dig(repeat=-1)
@@ -810,7 +822,7 @@ def tokens_to_actions(state:GameState, tokens:np.ndarray, agent, unit_log):
                 if distance(enemy_unit.pos, unit.pos) == 1 and enemy_unit.unit_type == "HEAVY":
                     target_unit = enemy_unit
             if not(target_unit is None):
-                print("enemy_near!")
+                #print("enemy_near!")
                 return_action, cost = log_calc(g_state, unit, unit_log[unit.unit_id][0])
                 if target_unit.power < unit.power and cost + unit.unit_cfg.MOVE_COST * 5 < unit.power and not in_terr:
                     #print(f"{unit.unit_id} offend")
@@ -1585,7 +1597,7 @@ if __name__ == "__main__":
     arg = sys.argv
     if arg[1] == "__train":
         #訓練の挙動を定義
-        print(f"ver1.15.2 restart from epoch {restart_epoch}")
+        print(f"ver1.15.3 restart from epoch {restart_epoch}")
         Train()
     elif arg[1] == "__predict":
         #実行の挙動を定義
