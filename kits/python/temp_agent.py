@@ -74,6 +74,9 @@ def rubble_num(g_state:GameState, pos:np.ndarray):
 def lichen_num(g_state:GameState, pos:np.ndarray):
     return g_state.board.lichen[pos[0]][pos[1]]
 
+def strain_num(g_state:GameState, pos:np.ndarray):
+    return g_state.board.lichen_strains[pos[0]][pos[1]]
+
 def unit_id_num(unit:Unit):
     str_id = unit.unit_id
     return int(str_id.split("_")[1])
@@ -143,29 +146,81 @@ def get_pseudo_lichen_dict(g_state:GameState, view_agent):
     opp_lichen_dict = {}
     factory_lichenpos_dict = {}
     pos_to_factory_dict = {}
-    my_area = []
-    opp_area = []
+    my_area_lichen = []
+    my_area_none = []
+    opp_area_lichen = []
+    opp_area_none = []
     for factory in my_factories.values():
         my_strains.append(factory.strain_id)
         factory_lichenpos_dict[factory.unit_id] = []
         for grid in factory_area_list:
-            my_area.append((factory.pos + grid).astype(np.int32).tobytes())
-            pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
+            if lichen_num(g_state, factory.pos + grid) == 0:
+                my_area_none.append((factory.pos + grid).astype(np.int32).tobytes())
+                pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
+            elif strain_num(g_state, factory.pos + grid) == factory.strain_id:
+                my_area_lichen.append((factory.pos + grid).astype(np.int32).tobytes())
+                pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
     for factory in opp_factories.values():
         opp_strains.append(factory.strain_id)
         factory_lichenpos_dict[factory.unit_id] = []
         for grid in factory_area_list:
-            opp_area.append((factory.pos + grid).astype(np.int32).tobytes())
-            pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
+            if lichen_num(g_state, factory.pos + grid) == 0:
+                opp_area_none.append((factory.pos + grid).astype(np.int32).tobytes())
+                pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
+            elif strain_num(g_state, factory.pos + grid) == factory.strain_id:
+                opp_area_lichen.append((factory.pos + grid).astype(np.int32).tobytes())
+                pos_to_factory_dict[(factory.pos + grid).astype(np.int32).tobytes()] = factory.unit_id
     my_temp_area = []
     opp_temp_area = []
-    pseudo_lichen = -1
-    while len(my_area) > 0 or len(opp_area) > 0:
-        for grid_byte in my_area:
-            my_lichen_dict[grid_byte] = pseudo_lichen
-        for grid_byte in opp_area:
-            opp_lichen_dict[grid_byte] = pseudo_lichen
-        for grid_byte in my_area:
+    pseudo_lichen = 0
+    while len(my_area_lichen) > 0 or len(opp_area_lichen) > 0:
+        for grid_byte in my_area_lichen:
+            my_lichen_dict[grid_byte] = (True, pseudo_lichen)
+        for grid_byte in opp_area_lichen:
+            opp_lichen_dict[grid_byte] = (True, pseudo_lichen)
+        for grid_byte in my_area_lichen:
+            for vec in orth_adj_list:
+                grid = np.frombuffer(grid_byte, dtype = np.int32)
+                target_grid:np.ndarray = grid + vec
+                if pos_out_map(target_grid, g_state.env_cfg.map_size) or rubble_num(g_state, target_grid) > 0 or resoure_exist(g_state, target_grid, 0) or resoure_exist(g_state, target_grid, 1):
+                    continue
+                if not(target_grid.astype(np.int32).tobytes() in my_lichen_dict) and not(target_grid.astype(np.int32).tobytes() in opp_lichen_dict) and\
+                    not(target_grid.astype(np.int32).tobytes() in my_temp_area) and not(target_grid.astype(np.int32).tobytes() in opp_temp_area):
+                    if lichen_num(g_state, target_grid) > 0 and strain_num(g_state, target_grid) == strain_num(g_state, grid):
+                        my_temp_area.append(target_grid.astype(np.int32).tobytes())
+                        factory_lichenpos_dict[pos_to_factory_dict[grid_byte]].append(target_grid)
+                        pos_to_factory_dict[target_grid.astype(np.int32).tobytes()] = pos_to_factory_dict[grid_byte]
+                    elif lichen_num(g_state, target_grid) == 0:
+                        my_area_none.append(target_grid.astype(np.int32).tobytes())
+                        factory_lichenpos_dict[pos_to_factory_dict[grid_byte]].append(target_grid)
+                        pos_to_factory_dict[target_grid.astype(np.int32).tobytes()] = pos_to_factory_dict[grid_byte]
+        for grid_byte in opp_area_lichen:
+            for vec in orth_adj_list:
+                target_grid:np.ndarray = np.frombuffer(grid_byte, dtype = np.int32) + vec
+                if pos_out_map(target_grid, g_state.env_cfg.map_size) or rubble_num(g_state, target_grid) > 0 or resoure_exist(g_state, target_grid, 0) or resoure_exist(g_state, target_grid, 1):
+                    continue
+                if not(target_grid.astype(np.int32).tobytes() in my_lichen_dict) and not(target_grid.astype(np.int32).tobytes() in opp_lichen_dict) and\
+                    not(target_grid.astype(np.int32).tobytes() in my_temp_area) and not(target_grid.astype(np.int32).tobytes() in opp_temp_area):
+                    if lichen_num(g_state, target_grid) > 0 and strain_num(g_state, target_grid) == strain_num(g_state, grid):
+                        opp_temp_area.append(target_grid.astype(np.int32).tobytes())
+                        factory_lichenpos_dict[pos_to_factory_dict[grid_byte]].append(target_grid)
+                        pos_to_factory_dict[target_grid.astype(np.int32).tobytes()] = pos_to_factory_dict[grid_byte]
+                    elif lichen_num(g_state, target_grid) == 0:
+                        opp_area_none.append(target_grid.astype(np.int32).tobytes())
+                        factory_lichenpos_dict[pos_to_factory_dict[grid_byte]].append(target_grid)
+                        pos_to_factory_dict[target_grid.astype(np.int32).tobytes()] = pos_to_factory_dict[grid_byte]
+        my_area_lichen = my_temp_area.copy()
+        opp_area_lichen = opp_temp_area.copy()
+        my_temp_area = []
+        opp_temp_area = []
+        pseudo_lichen += 1
+    pseudo_lichen = 0
+    while len(my_area_none) > 0 or len(opp_area_none) > 0:
+        for grid_byte in my_area_none:
+            my_lichen_dict[grid_byte] = (False, pseudo_lichen)
+        for grid_byte in opp_area_none:
+            opp_lichen_dict[grid_byte] = (False, pseudo_lichen)
+        for grid_byte in my_area_none:
             for vec in orth_adj_list:
                 target_grid:np.ndarray = np.frombuffer(grid_byte, dtype = np.int32) + vec
                 if pos_out_map(target_grid, g_state.env_cfg.map_size) or rubble_num(g_state, target_grid) > 0 or resoure_exist(g_state, target_grid, 0) or resoure_exist(g_state, target_grid, 1):
@@ -175,7 +230,7 @@ def get_pseudo_lichen_dict(g_state:GameState, view_agent):
                     my_temp_area.append(target_grid.astype(np.int32).tobytes())
                     factory_lichenpos_dict[pos_to_factory_dict[grid_byte]].append(target_grid)
                     pos_to_factory_dict[target_grid.astype(np.int32).tobytes()] = pos_to_factory_dict[grid_byte]
-        for grid_byte in opp_area:
+        for grid_byte in opp_area_none:
             for vec in orth_adj_list:
                 target_grid:np.ndarray = np.frombuffer(grid_byte, dtype = np.int32) + vec
                 if pos_out_map(target_grid, g_state.env_cfg.map_size) or rubble_num(g_state, target_grid) > 0 or resoure_exist(g_state, target_grid, 0) or resoure_exist(g_state, target_grid, 1):
@@ -185,8 +240,8 @@ def get_pseudo_lichen_dict(g_state:GameState, view_agent):
                     opp_temp_area.append(target_grid.astype(np.int32).tobytes())
                     factory_lichenpos_dict[pos_to_factory_dict[grid_byte]].append(target_grid)
                     pos_to_factory_dict[target_grid.astype(np.int32).tobytes()] = pos_to_factory_dict[grid_byte]
-        my_area = my_temp_area.copy()
-        opp_area = opp_temp_area.copy()
+        my_area_none = my_temp_area.copy()
+        opp_area_none = opp_temp_area.copy()
         my_temp_area = []
         opp_temp_area = []
         pseudo_lichen += 1
@@ -194,9 +249,12 @@ def get_pseudo_lichen_dict(g_state:GameState, view_agent):
     return my_lichen_dict, opp_lichen_dict, factory_lichenpos_dict
 
 def get_tactical_points(g_state:GameState, my_lichen, opp_lichen, my_factories):
+    def more_distal(src, tgt):
+        return (tgt[0] and not src[0]) or (src[1] > tgt[1])
     dig_pos = []
-    for pos_byte, lichen in my_lichen.items():
+    for pos_byte, lichen_tp in my_lichen.items():
         pos:np.ndarray = np.frombuffer(pos_byte, dtype = np.int32)
+        lichen_exist, lichen = lichen_tp
         if lichen < 50:
             #自分の植物の周りで、上下左右を走査。rubble一個挟んで空地ならrubble地をtacticalpointとする。
             #その際、自分の周囲に敵の土地があったらダメです。
@@ -256,9 +314,10 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen, my_factories):
         for pos_byte in temp_list:
             secondary_pos.append(np.frombuffer(pos_byte, dtype=np.int32))
     else:
-        for pos_byte, lichen in opp_lichen.items():
+        for pos_byte, lichen_tp in opp_lichen.items():
             pos = np.frombuffer(pos_byte, dtype = np.int32)
-            if 0 < lichen and lichen < 25:#あまり遠すぎても効果薄いし計算時間かかる
+            lichen_exist, lichen = lichen_tp
+            if lichen_exist or lichen < 25:#あまり遠すぎても効果薄いし計算時間かかる
                 zero_lichen_check_list = [[2,2],[-2,2],[2,-2],[-2,-2]]
                 same_lichen_is = False
                 one_more_pseudo_lichens = []
@@ -267,10 +326,11 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen, my_factories):
                         if i == 0 and j == 0:
                             continue
                         target_pos = pos + np.array([i,j])
-                        if (target_pos.astype(np.int32).tobytes() in opp_lichen) and opp_lichen[target_pos.astype(np.int32).tobytes()] == lichen:
+                        target_pos_byte = target_pos.astype(np.int32).tobytes()
+                        if target_pos_byte in opp_lichen and opp_lichen[target_pos_byte][0] == lichen_exist and opp_lichen[target_pos_byte][1] == lichen:
                             same_lichen_is = True
                             continue
-                        if (target_pos.astype(np.int32).tobytes() in opp_lichen) and opp_lichen[target_pos.astype(np.int32).tobytes()] == lichen+1:
+                        if target_pos_byte in opp_lichen and more_distal(opp_lichen[target_pos_byte], lichen_tp):
                             one_more_pseudo_lichens.append(target_pos)
                 if same_lichen_is or len(one_more_pseudo_lichens) == 0:
                     continue
@@ -279,12 +339,13 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen, my_factories):
                 now_pos = one_more_pseudo_lichens.copy()
                 temp_pos = []
                 link_num = 0
-                now_pseudo_lichen_num = lichen + 2
                 while link_num < 10 and len(now_pos) > 0:
                     for pos_ in now_pos:
+                        pos_byte_ = pos_.astype(np.int32).tobytes()
                         link_num += 1
                         for dir in orth_adj_list:
                             target_pos = pos_ + dir
+                            target_pos_byte = target_pos.astype(np.int32).tobytes()
                             if pos_out_map(target_pos, g_state.env_cfg.map_size):
                                 continue
                             already_is = False
@@ -292,21 +353,21 @@ def get_tactical_points(g_state:GameState, my_lichen, opp_lichen, my_factories):
                                 if all(pas_pos_ == target_pos):
                                     already_is = True
                                     break
-                            if not already_is and target_pos.astype(np.int32).tobytes() in opp_lichen and opp_lichen[target_pos.astype(np.int32).tobytes()] == now_pseudo_lichen_num:
+                            if not already_is and target_pos_byte in opp_lichen and more_distal(opp_lichen[target_pos_byte], opp_lichen[pos_byte_]):
                                 temp_pos.append(target_pos)
                                 past_pos.append(target_pos)
                     now_pos = temp_pos.copy()
                     temp_pos = []
-                    now_pseudo_lichen_num += 1
                 if not link_num < 10:
-                    secondary_lichen_dict[pos.astype(np.int32).tobytes()] = lichen
-        for pos_byte, lichen in secondary_lichen_dict.items():
+                    secondary_lichen_dict[pos.astype(np.int32).tobytes()] = lichen_tp
+        for pos_byte, lichen_tp in secondary_lichen_dict.items():
             better_exists = False
             for pos_byte_ in secondary_lichen_dict:
                 pos = np.frombuffer(pos_byte, dtype=np.int32) 
                 pos_ = np.frombuffer(pos_byte_, dtype=np.int32)
-                if distance(pos, pos_) == 1 and secondary_lichen_dict[pos_byte_] < lichen:
+                if distance(pos, pos_) == 1 and more_distal(secondary_lichen_dict[pos_byte], secondary_lichen_dict[pos_byte_]):
                     better_exists = True
+                    break
             if not better_exists:
                 secondary_pos.append(np.frombuffer(pos_byte, dtype=np.int32))
     return dig_pos, secondary_pos
